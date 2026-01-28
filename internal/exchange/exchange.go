@@ -8,6 +8,9 @@ import (
 	"time"
 )
 
+// PeerExpiredCallback è chiamata quando un peer scade
+type PeerExpiredCallback func(peerIndex uint32, reason string)
+
 const (
 	endpointTTL  = 1 * time.Minute
 	handshakeTTL = 5 * time.Second
@@ -48,9 +51,10 @@ func (p *peerInfo) isExpiredAt(t time.Time) bool {
 
 // ExchangeTable is a concurrency-safe table that maintains wireguard peer information.
 type ExchangeTable struct {
-	mu        sync.RWMutex
-	endpoints map[string]*endpointInfo
-	peers     map[uint32]peerInfo
+	mu               sync.RWMutex
+	endpoints        map[string]*endpointInfo
+	peers            map[uint32]peerInfo
+	onPeerExpired    PeerExpiredCallback
 }
 
 func (t *ExchangeTable) refEndpoint(addr net.UDPAddr) *endpointInfo {
@@ -80,6 +84,18 @@ func (t *ExchangeTable) cleanup() {
 	for index, peer := range t.peers {
 		if peer.isExpiredAt(now) {
 			slog.Debug("remove expired peer information", "index", index)
+			
+			// Notifica la scadenza del peer se c'è un callback
+			if t.onPeerExpired != nil {
+				reason := "timeout"
+				if peer.established {
+					reason = "session_timeout"
+				} else {
+					reason = "handshake_timeout"
+				}
+				t.onPeerExpired(index, reason)
+			}
+			
 			t.derefEndpoint(peer.addr)
 			delete(t.peers, index)
 		}
@@ -222,4 +238,11 @@ func MakeExchangeTable() ExchangeTable {
 		endpoints: make(map[string]*endpointInfo),
 		peers:     make(map[uint32]peerInfo),
 	}
+}
+
+// SetPeerExpiredCallback imposta la callback per quando un peer scade
+func (t *ExchangeTable) SetPeerExpiredCallback(callback PeerExpiredCallback) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.onPeerExpired = callback
 }

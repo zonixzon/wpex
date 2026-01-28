@@ -8,6 +8,9 @@ without compromising the end-to-end encryption of WireGuard.
 - The relay server **can't** tamper the encryption by any means.
 - Works transparently with vanilla WireGuard setups, no extra software required.
 - Zero MTU overhead.
+- **NEW**: Real-time VPN monitoring and statistics
+- **NEW**: HTTP dashboard for monitoring connected peers and handshake status
+- **NEW**: Detailed logging of peer connections, disconnections, and data transfer
 
 ## Why `wpex`
 
@@ -42,11 +45,12 @@ the magic behind `wpex`.
 Fetch and run the `wpex` Docker image with:
 
 ```bash
-docker run -d -p 40000:40000/udp ghcr.io/weiiwang01/wpex:latest --broadcast-rate 3
+docker run -d -p 40000:40000/udp -p 8080:8080 ghcr.io/weiiwang01/wpex:latest --broadcast-rate 3 --stats :8080
 ```
 
 See [Protections](#protections-against-amplification-attacks) for more
-information on the `--broadcast-rate` flag.
+information on the `--broadcast-rate` flag and [Monitoring](#monitoring) for
+information on the `--stats` flag.
 
 ### Using Pre-built Binaries:
 
@@ -136,6 +140,66 @@ docker run -d -p 40000:40000/udp ghcr.io/weiiwang01/wpex:latest \
 wpex --allow AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
   --allow BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=
 ```
+
+## Monitoring
+
+`wpex` includes comprehensive VPN monitoring capabilities that allow you to track:
+
+- **Handshake Status**: Monitor when peers initiate and complete handshakes
+- **Active Sessions**: Track how many VPN sessions are currently established
+- **Peer Connections**: See which peers are connected, disconnected, or handshaking
+- **Data Transfer**: Monitor bytes transferred per peer and total server statistics
+- **Connection Duration**: Track how long peers have been connected
+
+### HTTP Statistics Server
+
+Enable the HTTP statistics server with the `--stats` flag:
+
+```bash
+# Basic usage with statistics server on port 8080
+wpex --stats :8080
+
+# Full example with broadcast rate limit and statistics
+wpex --port 40000 --broadcast-rate 3 --stats :8080
+
+# With peer filtering and statistics
+wpex --allow AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
+     --broadcast-rate 3 \
+     --stats :8080
+```
+
+Once running, you can access:
+
+- **Dashboard**: `http://localhost:8080/` - Visual dashboard with real-time statistics
+- **JSON API**: `http://localhost:8080/stats` - Raw statistics in JSON format
+- **Health Check**: `http://localhost:8080/health` - Server health status
+
+### Dashboard Features
+
+The web dashboard provides:
+
+- Real-time peer status (Connected/Handshaking/Disconnected)
+- Server uptime and total connection statistics
+- Handshake success rates
+- Per-peer data transfer statistics
+- Auto-refresh every 30 seconds
+- Responsive design for mobile devices
+
+### Logging
+
+`wpex` automatically logs important VPN events:
+
+```
+INFO Handshake initiated peer_index=12345 address=192.168.1.100:51820 total_handshakes=1
+INFO Handshake completed - VPN session established sender_index=12345 receiver_index=67890 active_sessions=1 success_rate=100
+INFO VPN Server Statistics uptime=5m0s connected_peers=2 active_sessions=1 total_handshakes=2 success_rate_percent=100 total_bytes_mb=1.2
+INFO Peer disconnected peer_index=12345 address=192.168.1.100:51820 reason=session_timeout session_duration=10m30s
+```
+
+### Command Line Options
+
+- `--stats <addr>`: Enable HTTP statistics server on specified address (e.g., `:8080`, `0.0.0.0:8080`)
+- All existing options remain unchanged
 
 ## How `wpex` Works
 

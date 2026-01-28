@@ -31,6 +31,7 @@ func main() {
 	debug := flag.Bool("debug", false, "enable debug messages")
 	broadcastRate := flag.Uint("broadcast-rate", 0, "broadcast rate limit in packet per second")
 	versionFlag := flag.Bool("version", false, "show version number and quit")
+	statsAddr := flag.String("stats", "", "HTTP address for statistics server (e.g., ':8080')")
 	var allows pubKeys
 	flag.Var(&allows, "allow", "allow a wireguard public key. --allow can be used multiple times for allowing multiple public keys")
 	flag.Parse()
@@ -61,5 +62,11 @@ func main() {
 	} else {
 		slog.Debug(fmt.Sprintf("broadcast rate limit is set to %d", *broadcastRate))
 	}
-	relay.Start(address, allowKeys, rate.NewLimiter(limit, int((*broadcastRate)*5)))
+	
+	if *statsAddr != "" {
+		slog.Info("Statistics server will be available", "addr", *statsAddr)
+		relay.StartWithStatsServer(address, allowKeys, rate.NewLimiter(limit, int((*broadcastRate)*5)), *statsAddr)
+	} else {
+		relay.Start(address, allowKeys, rate.NewLimiter(limit, int((*broadcastRate)*5)))
+	}
 }

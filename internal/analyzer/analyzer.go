@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"github.com/weiiwang01/wpex/internal/exchange"
+	"github.com/weiiwang01/wpex/internal/stats"
 	"log"
 	"log/slog"
 	"net"
@@ -20,6 +21,7 @@ const (
 type WireguardAnalyzer struct {
 	table   exchange.ExchangeTable
 	checker macChecker
+	stats   *stats.VPNStats
 }
 
 func (t *WireguardAnalyzer) decodeIndex(index []byte) uint32 {
@@ -62,6 +64,12 @@ func (t *WireguardAnalyzer) analyseHandshakeInitiation(packet []byte, peer net.U
 		logger.Error(fmt.Sprintf("failed to add address: %s", err))
 		return nil, nil
 	}
+	
+	// Log handshake initiation to stats
+	if t.stats != nil {
+		t.stats.LogHandshakeInitiated(sender, peer)
+	}
+	
 	addresses := t.table.ListAddrs(peer)
 	slog.Debug("handshake initiation message received", "addr", peer.String(), "sender", sender, "broadcast", len(addresses))
 	return addresses, packet
@@ -99,6 +107,12 @@ func (t *WireguardAnalyzer) analyseHandshakeResponse(packet []byte, peer net.UDP
 		logger.Error(fmt.Sprintf("failed to link peers: %s", err))
 		return nil, nil
 	}
+	
+	// Log handshake completion to stats
+	if t.stats != nil {
+		t.stats.LogHandshakeCompleted(sender, receiverIdx)
+	}
+	
 	return []net.UDPAddr{receiver}, packet
 }
 
@@ -143,6 +157,12 @@ func (t *WireguardAnalyzer) analyseTransportData(packet []byte, peer net.UDPAddr
 			return nil, nil
 		}
 	}
+	
+	// Log data transfer to stats
+	if t.stats != nil {
+		t.stats.LogDataTransfer(sender, receiverIdx, len(packet), peer)
+	}
+	
 	return []net.UDPAddr{receiver}, packet
 }
 
@@ -179,12 +199,27 @@ func MakeWireguardAnalyzer(pubkeys [][]byte) WireguardAnalyzer {
 	if err != nil {
 		log.Fatal(fmt.Errorf("failed to generate cookie secret: %w", err))
 	}
+	
+	vpnStats := stats.NewVPNStats()
+	table := exchange.MakeExchangeTable()
+	
+	// Imposta il callback per le disconnessioni
+	table.SetPeerExpiredCallback(func(peerIndex uint32, reason string) {
+		vpnStats.LogPeerDisconnected(peerIndex, reason)
+	})
+	
 	return WireguardAnalyzer{
-		table: exchange.MakeExchangeTable(),
+		table: table,
 		checker: macChecker{
 			pubkeys: pubkeys,
 			secret:  [32]byte(secret),
 			start:   time.Now(),
 		},
+		stats: vpnStats,
 	}
+}
+
+// GetStats restituisce le statistiche VPN
+func (t *WireguardAnalyzer) GetStats() *stats.VPNStats {
+	return t.stats
 }

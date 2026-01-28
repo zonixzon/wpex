@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"github.com/weiiwang01/wpex/internal/analyzer"
+	"github.com/weiiwang01/wpex/internal/stats"
 	"golang.org/x/time/rate"
 	"log"
 	"log/slog"
 	"net"
 	"runtime"
 	"syscall"
+	"time"
 )
 
 type udpPacket struct {
@@ -52,6 +54,11 @@ func (r *Relay) relay(conn *net.UDPConn) {
 
 // Start starts the wireguard packet relay server.
 func Start(address string, publicKeys [][]byte, broadcastLimit *rate.Limiter) {
+	StartWithStatsServer(address, publicKeys, broadcastLimit, "")
+}
+
+// StartWithStatsServer starts the wireguard packet relay server with optional HTTP stats server.
+func StartWithStatsServer(address string, publicKeys [][]byte, broadcastLimit *rate.Limiter, statsAddr string) {
 	slog.Info("server listening", "addr", address)
 	var lc = net.ListenConfig{
 		Control: func(network, address string, c syscall.RawConn) error {
@@ -67,6 +74,36 @@ func Start(address string, publicKeys [][]byte, broadcastLimit *rate.Limiter) {
 		analyzer: analyzer.MakeWireguardAnalyzer(publicKeys),
 		limit:    broadcastLimit,
 	}
+	
+	// Avvia il server HTTP per le statistiche se richiesto
+	var httpServer *stats.HTTPServer
+	if statsAddr != "" {
+		httpServer = stats.NewHTTPServer(statsAddr, relay.analyzer.GetStats())
+		if err := httpServer.Start(); err != nil {
+			slog.Error("Failed to start HTTP stats server", "error", err)
+		} else {
+			slog.Info("HTTP statistics server started", "addr", statsAddr)
+		}
+	}
+	
+	// Avvia il logging periodico delle statistiche
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute) // Log ogni 5 minuti
+		cleanupTicker := time.NewTicker(1 * time.Minute) // Cleanup ogni minuto
+		defer ticker.Stop()
+		defer cleanupTicker.Stop()
+		
+		for {
+			select {
+			case <-ticker.C:
+				relay.analyzer.GetStats().LogPeriodicStats()
+			case <-cleanupTicker.C:
+				// Cleanup dei peer scaduti dalle statistiche (mantieni per 10 minuti dopo l'ultima attività)
+				relay.analyzer.GetStats().CleanupExpiredPeers(10 * time.Minute)
+			}
+		}
+	}()
+	
 	for i := 0; i < runtime.NumCPU(); i++ {
 		l, err := lc.ListenPacket(context.Background(), "udp", address)
 		if err != nil {
@@ -75,5 +112,15 @@ func Start(address string, publicKeys [][]byte, broadcastLimit *rate.Limiter) {
 		conn := l.(*net.UDPConn)
 		go relay.relay(conn)
 	}
+	
+	// Graceful shutdown handler (opzionale)
+	if httpServer != nil {
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			httpServer.Stop(ctx)
+		}()
+	}
+	
 	select {}
 }
