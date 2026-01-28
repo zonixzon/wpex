@@ -1,0 +1,57 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Build artifacts
+wpex.exe
+wpex
+*.exe
+*.so
+*.dll
+
+# Documentation
+README.md
+*.md
+docs/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Test files
+*_test.go
+test/
+testing/
+
+# Docker files (except main Dockerfile)
+docker-compose*.yml
+.dockerignore
+
+# Scripts di build (tranne quelli necessari)
+build-*.sh
+build-*.ps1
+
+# Temporary files
+tmp/
+temp/
+.tmp/
+
+# Node modules (se presenti)
+node_modules/
+
+# Python files
+__pycache__/
+*.py[cod]
+*$py.class

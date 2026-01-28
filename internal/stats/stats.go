@@ -56,11 +56,16 @@ type VPNStats struct {
 
 // NewVPNStats crea una nuova istanza di statistiche VPN
 func NewVPNStats() *VPNStats {
-	return &VPNStats{
+	stats := &VPNStats{
 		StartTime:   time.Now(),
 		Peers:       make(map[uint32]*PeerInfo),
 		EndpointMap: make(map[string]uint32),
 	}
+	
+	// Avvia il cleanup timer automatico (60 secondi di timeout per peer inattivi)
+	stats.StartCleanupTimer(60 * time.Second)
+	
+	return stats
 }
 
 // LogHandshakeInitiated registra l'inizio di un handshake
@@ -134,11 +139,81 @@ func (s *VPNStats) LogDataTransfer(senderIndex, receiverIndex uint32, bytes int,
 		peer.LastSeen = time.Now()
 		peer.Address = senderAddr.String()
 		s.EndpointMap[senderAddr.String()] = senderIndex
+		
+		// Se il peer è in handshaking e invia dati, marcalo come connected
+		if peer.Status == PeerStatusHandshaking {
+			peer.Status = PeerStatusConnected
+			if peer.ConnectedAt.IsZero() {
+				peer.ConnectedAt = time.Now()
+			}
+			s.ActiveSessions++
+			slog.Info("Peer marked as connected due to data transfer", 
+				"peer_index", senderIndex,
+				"address", peer.Address,
+				"bytes_sent", peer.BytesSent)
+		}
+	} else {
+		// Prima controlla se esiste già un peer con lo stesso indirizzo
+		existingPeerIndex := uint32(0)
+		for idx, existingPeer := range s.Peers {
+			if existingPeer.Address == senderAddr.String() {
+				existingPeerIndex = idx
+				break
+			}
+		}
+		
+		if existingPeerIndex != 0 {
+			// Esiste già un peer con questo indirizzo - aggiorna quello esistente
+			existingPeer := s.Peers[existingPeerIndex]
+			existingPeer.BytesSent += uint64(bytes)
+			existingPeer.LastSeen = time.Now()
+			if existingPeer.Status == PeerStatusHandshaking {
+				existingPeer.Status = PeerStatusConnected
+				if existingPeer.ConnectedAt.IsZero() {
+					existingPeer.ConnectedAt = time.Now()
+				}
+				s.ActiveSessions++
+			}
+			slog.Info("Updated existing peer instead of creating duplicate", 
+				"existing_peer_index", existingPeerIndex,
+				"new_peer_index", senderIndex,
+				"address", senderAddr.String())
+		} else {
+			// Solo se NON esiste un peer con questo indirizzo, creane uno nuovo
+			s.Peers[senderIndex] = &PeerInfo{
+				Index:       senderIndex,
+				Address:     senderAddr.String(),
+				Status:      PeerStatusConnected,
+				ConnectedAt: time.Now(),
+				LastSeen:    time.Now(),
+				BytesSent:   uint64(bytes),
+				BytesRecv:   0,
+			}
+			s.EndpointMap[senderAddr.String()] = senderIndex
+			s.ActiveSessions++
+			slog.Info("New peer auto-created as connected from data transfer", 
+				"peer_index", senderIndex,
+				"address", senderAddr.String())
+		}
 	}
 
 	// Aggiorna le statistiche del peer destinatario
 	if peer, exists := s.Peers[receiverIndex]; exists {
 		peer.BytesRecv += uint64(bytes)
+		peer.LastSeen = time.Now()
+		
+		// Se il peer è in handshaking e riceve dati, marcalo come connected
+		if peer.Status == PeerStatusHandshaking {
+			peer.Status = PeerStatusConnected
+			if peer.ConnectedAt.IsZero() {
+				peer.ConnectedAt = time.Now()
+			}
+			s.ActiveSessions++
+			slog.Info("Peer marked as connected due to data reception", 
+				"peer_index", receiverIndex,
+				"address", peer.Address,
+				"bytes_received", peer.BytesRecv)
+		}
 	}
 }
 
@@ -175,8 +250,11 @@ func (s *VPNStats) GetConnectedPeersCount() int {
 	defer s.mu.RUnlock()
 
 	count := 0
+	now := time.Now()
+	
 	for _, peer := range s.Peers {
-		if peer.Status == PeerStatusConnected {
+		// Considera connesso solo se lo stato è Connected E non è scaduto (last_seen < 60s fa)
+		if peer.Status == PeerStatusConnected && now.Sub(peer.LastSeen) < (60*time.Second) {
 			count++
 		}
 	}
@@ -263,9 +341,29 @@ func (s *VPNStats) CleanupExpiredPeers(timeout time.Duration) {
 	defer s.mu.Unlock()
 
 	now := time.Now()
+	cleanedCount := 0
+	
 	for index, peer := range s.Peers {
-		if peer.Status != PeerStatusConnected && now.Sub(peer.LastSeen) > timeout {
-			slog.Debug("Removing expired peer from stats", "peer_index", index, "last_seen", peer.LastSeen)
+		// Considera scaduti i peer che non inviano dati da più di timeout secondi
+		timeSinceLastSeen := now.Sub(peer.LastSeen)
+		
+		// Se il peer è connesso ma non invia dati da troppo tempo, marcalo come disconnesso
+		if peer.Status == PeerStatusConnected && timeSinceLastSeen > timeout {
+			peer.Status = PeerStatusDisconnected
+			s.ActiveSessions--
+			slog.Info("Peer marked as disconnected due to timeout", 
+				"peer_index", index, 
+				"address", peer.Address,
+				"last_seen", peer.LastSeen,
+				"timeout_duration", timeSinceLastSeen.String())
+		}
+		
+		// Rimuovi peer disconnessi da più di 2x timeout
+		if peer.Status != PeerStatusConnected && timeSinceLastSeen > (timeout*2) {
+			slog.Info("Removing expired peer from stats", 
+				"peer_index", index, 
+				"address", peer.Address,
+				"last_seen", peer.LastSeen)
 			
 			// Rimuovi dalla mappa degli endpoint
 			if addr := peer.Address; addr != "" {
@@ -273,7 +371,12 @@ func (s *VPNStats) CleanupExpiredPeers(timeout time.Duration) {
 			}
 			
 			delete(s.Peers, index)
+			cleanedCount++
 		}
+	}
+	
+	if cleanedCount > 0 {
+		slog.Info("Cleanup completed", "removed_peers", cleanedCount, "active_sessions", s.ActiveSessions)
 	}
 }
 
@@ -283,4 +386,95 @@ func (s *VPNStats) ToJSON() ([]byte, error) {
 	defer s.mu.RUnlock()
 	
 	return json.MarshalIndent(s, "", "  ")
+}
+
+// StartCleanupTimer avvia un timer periodico per pulire i peer scaduti
+func (s *VPNStats) StartCleanupTimer(timeout time.Duration) {
+	ticker := time.NewTicker(30 * time.Second) // Cleanup ogni 30 secondi
+	
+	go func() {
+		defer ticker.Stop()
+		
+		slog.Info("Started peer cleanup timer", "timeout", timeout, "interval", "30s")
+		
+		for range ticker.C {
+			s.SyncPeerStatus()       // Prima sincronizza gli status
+			s.CleanupExpiredPeers(timeout) // Poi pulisce i peer scaduti
+		}
+	}()
+}
+
+// SyncPeerStatus forza la sincronizzazione dello status dei peer
+func (s *VPNStats) SyncPeerStatus() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	
+	now := time.Now()
+	syncedCount := 0
+	
+	// 1. Corregge status inconsistenti
+	for index, peer := range s.Peers {
+		// Se un peer ha traffico recente (< 60s) ma è ancora handshaking, marcalo connected
+		if peer.Status == PeerStatusHandshaking && (peer.BytesSent > 0 || peer.BytesRecv > 0) {
+			timeSinceLastSeen := now.Sub(peer.LastSeen)
+			if timeSinceLastSeen < (60 * time.Second) {
+				peer.Status = PeerStatusConnected
+				if peer.ConnectedAt.IsZero() {
+					peer.ConnectedAt = now
+				}
+				s.ActiveSessions++
+				syncedCount++
+				slog.Info("Sync: Peer status corrected to connected", 
+					"peer_index", index,
+					"address", peer.Address,
+					"bytes_sent", peer.BytesSent,
+					"bytes_received", peer.BytesRecv)
+			}
+		}
+	}
+	
+	// 2. Rimuove peer duplicati (stesso indirizzo)
+	addressMap := make(map[string]uint32)
+	duplicatesRemoved := 0
+	
+	for index, peer := range s.Peers {
+		if existingIndex, exists := addressMap[peer.Address]; exists {
+			// Trovato duplicato - mantieni quello con più traffico
+			existingPeer := s.Peers[existingIndex]
+			totalBytesExisting := existingPeer.BytesSent + existingPeer.BytesRecv
+			totalBytesCurrent := peer.BytesSent + peer.BytesRecv
+			
+			if totalBytesCurrent > totalBytesExisting {
+				// Il peer corrente ha più traffico - rimuovi quello esistente
+				if existingPeer.Status == PeerStatusConnected {
+					s.ActiveSessions--
+				}
+				delete(s.Peers, existingIndex)
+				addressMap[peer.Address] = index
+				slog.Info("Removed duplicate peer (kept newer one)", 
+					"removed_index", existingIndex,
+					"kept_index", index,
+					"address", peer.Address)
+			} else {
+				// Il peer esistente ha più traffico - rimuovi quello corrente
+				if peer.Status == PeerStatusConnected {
+					s.ActiveSessions--
+				}
+				delete(s.Peers, index)
+				slog.Info("Removed duplicate peer (kept existing one)", 
+					"removed_index", index,
+					"kept_index", existingIndex,
+					"address", peer.Address)
+			}
+			duplicatesRemoved++
+		} else {
+			addressMap[peer.Address] = index
+		}
+	}
+	
+	if syncedCount > 0 || duplicatesRemoved > 0 {
+		slog.Info("Peer status synchronization completed", 
+			"corrected_peers", syncedCount,
+			"removed_duplicates", duplicatesRemoved)
+	}
 }

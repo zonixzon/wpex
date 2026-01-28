@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  wpex:
+    build: .
+    container_name: wpex-server
+    restart: unless-stopped
+    ports:
+      - "40000:40000/udp"  # Porta VPN WireGuard
+      - "8080:8080/tcp"    # Dashboard monitoring
+    environment:
+      - TZ=Europe/Rome     # Imposta il fuso orario
+    volumes:
+      - wpex-data:/data    # Persiste i dati (se necessario)
+      - wpex-logs:/var/log/wpex  # Persiste i log
+    command: [
+      "--port", "40000",
+      "--stats", ":8080",
+      "--broadcast-rate", "3",
+      "--debug"
+    ]
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - wpex-network
+    
+  # Opzionale: Reverse proxy per HTTPS
+  # nginx:
+  #   image: nginx:alpine
+  #   container_name: wpex-nginx
+  #   restart: unless-stopped
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./nginx.conf:/etc/nginx/nginx.conf:ro
+  #     - ./ssl:/etc/ssl/certs:ro
+  #   depends_on:
+  #     - wpex
+  #   networks:
+  #     - wpex-network
+
+volumes:
+  wpex-data:
+    driver: local
+  wpex-logs:
+    driver: local
+
+networks:
+  wpex-network:
+    driver: bridge
