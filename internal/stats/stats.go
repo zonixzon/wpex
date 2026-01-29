@@ -461,32 +461,51 @@ func (s *VPNStats) SyncPeerStatus() {
 
 	for index, peer := range s.Peers {
 		if existingIndex, exists := addressMap[peer.Address]; exists {
-			// Trovato duplicato - mantieni quello con più traffico
+			// Trovato duplicato - dobbiamo decidere quale mantenere.
+			// La logica precedente basata sui byte totali causava problemi:
+			// se un client si riconnette (nuovo indice, bytes=0), veniva rimosso
+			// a favore della sessione vecchia (bytes>0) ma non più attiva.
+			
 			existingPeer := s.Peers[existingIndex]
-			totalBytesExisting := existingPeer.BytesSent + existingPeer.BytesRecv
-			totalBytesCurrent := peer.BytesSent + peer.BytesRecv
+			
+			// Criterio Principale: ConnectedAt
+			// Manteniamo sempre la sessione più recente.
+			keepCurrent := false
+			
+			if peer.ConnectedAt.After(existingPeer.ConnectedAt) {
+				keepCurrent = true
+			} else if existingPeer.ConnectedAt.After(peer.ConnectedAt) {
+				keepCurrent = false
+			} else {
+				// Se timestamp identici (improbabile), usiamo il traffico come fallback
+				totalBytesExisting := existingPeer.BytesSent + existingPeer.BytesRecv
+				totalBytesCurrent := peer.BytesSent + peer.BytesRecv
+				keepCurrent = totalBytesCurrent >= totalBytesExisting
+			}
 
-			if totalBytesCurrent > totalBytesExisting {
-				// Il peer corrente ha più traffico - rimuovi quello esistente
+			if keepCurrent {
+				// Manteniamo il peer corrente, rimuoviamo quello esistente
+				
 				// ⚡ PROTEZIONE: Verifica stato prima di decrementare
 				if existingPeer.Status == PeerStatusConnected && s.ActiveSessions > 0 {
 					s.ActiveSessions--
 				}
 				delete(s.Peers, existingIndex)
 				addressMap[peer.Address] = index
-				slog.Info("Removed duplicate peer (kept newer one)",
+				slog.Info("Removed duplicate peer (kept newer/active one)",
 					"removed_index", existingIndex,
 					"kept_index", index,
 					"address", peer.Address,
 					"active_sessions_remaining", s.ActiveSessions)
 			} else {
-				// Il peer esistente ha più traffico - rimuovi quello corrente
+				// Manteniamo il peer esistente, rimuoviamo quello corrente
+				
 				// ⚡ PROTEZIONE: Verifica stato prima di decrementare
 				if peer.Status == PeerStatusConnected && s.ActiveSessions > 0 {
 					s.ActiveSessions--
 				}
 				delete(s.Peers, index)
-				slog.Info("Removed duplicate peer (kept existing one)",
+				slog.Info("Removed duplicate peer (kept existing/older one)",
 					"removed_index", index,
 					"kept_index", existingIndex,
 					"address", peer.Address)
