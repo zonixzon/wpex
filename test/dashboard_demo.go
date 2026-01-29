@@ -8,6 +8,10 @@ import (
 	"time"
 )
 
+func main() {
+	runDashboardDemo()
+}
+
 func runDashboardDemo() {
 	fmt.Println("🧪 Testing WPEX Statistics Dashboard...")
 
@@ -99,5 +103,3 @@ func runDashboardDemo() {
 
 	fmt.Println("\n✅ All tests completed!")
 }
-
-// main function removed - runDashboardDemo() can be called from dashboard_test.go

@@ -3,12 +3,13 @@ package analyzer
 import (
 	"encoding/binary"
 	"fmt"
-	"github.com/weiiwang01/wpex/internal/exchange"
-	"github.com/weiiwang01/wpex/internal/stats"
 	"log"
 	"log/slog"
 	"net"
 	"time"
+
+	"github.com/weiiwang01/wpex/internal/exchange"
+	"github.com/weiiwang01/wpex/internal/stats"
 )
 
 const (
@@ -64,12 +65,12 @@ func (t *WireguardAnalyzer) analyseHandshakeInitiation(packet []byte, peer net.U
 		logger.Error(fmt.Sprintf("failed to add address: %s", err))
 		return nil, nil
 	}
-	
+
 	// Log handshake initiation to stats
 	if t.stats != nil {
 		t.stats.LogHandshakeInitiated(sender, peer)
 	}
-	
+
 	addresses := t.table.ListAddrs(peer)
 	slog.Debug("handshake initiation message received", "addr", peer.String(), "sender", sender, "broadcast", len(addresses))
 	return addresses, packet
@@ -107,12 +108,18 @@ func (t *WireguardAnalyzer) analyseHandshakeResponse(packet []byte, peer net.UDP
 		logger.Error(fmt.Sprintf("failed to link peers: %s", err))
 		return nil, nil
 	}
-	
+
 	// Log handshake completion to stats
 	if t.stats != nil {
 		t.stats.LogHandshakeCompleted(sender, receiverIdx)
 	}
-	
+
+	slog.Info("🤝 Handshake completed - peers associated",
+		"sender_index", sender,
+		"receiver_index", receiverIdx,
+		"sender_addr", peer.String(),
+		"receiver_addr", receiver.String())
+
 	return []net.UDPAddr{receiver}, packet
 }
 
@@ -136,33 +143,60 @@ func (t *WireguardAnalyzer) analyseTransportData(packet []byte, peer net.UDPAddr
 	receiverIdx := t.decodeIndex(packet[4:8])
 	receiver, err := t.table.GetPeerAddr(receiverIdx)
 	if err != nil {
-		slog.Warn(fmt.Sprintf("unknown receiver in transport data: %s", err), "addr", peer.String())
+		slog.Warn("Transport data: unknown receiver",
+			"receiver_index", receiverIdx,
+			"source_addr", peer.String(),
+			"error", err.Error())
 		return nil, nil
 	}
+
 	sender, err := t.table.GetPeerCounterpart(receiverIdx)
 	if err != nil {
-		slog.Warn(fmt.Sprintf("unknown sender in transport data: %s", err), "addr", peer.String())
+		slog.Warn("Transport data: unknown sender (no counterpart)",
+			"receiver_index", receiverIdx,
+			"receiver_addr", receiver.String(),
+			"source_addr", peer.String(),
+			"error", err.Error())
 		return nil, nil
 	}
+
 	addr, err := t.table.GetPeerAddr(sender)
 	if err != nil {
-		slog.Warn(fmt.Sprintf("no sender address record in transport data: %s", err), "addr", peer.String())
+		slog.Warn("Transport data: no sender address record",
+			"sender_index", sender,
+			"receiver_index", receiverIdx,
+			"source_addr", peer.String(),
+			"error", err.Error())
 		return nil, nil
 	}
+
 	if !addrEqual(addr, peer) {
-		slog.Debug("roaming detected in transport data message", "sender", sender, "before", addr.String(), "after", peer.String())
+		slog.Info("🔄 Roaming detected in transport data",
+			"sender_index", sender,
+			"old_addr", addr.String(),
+			"new_addr", peer.String())
 		err := t.table.UpdatePeerAddr(sender, peer)
 		if err != nil {
-			slog.Warn(fmt.Sprintf("failed to update sender address: %s", err), "addr", peer.String())
+			slog.Error("Failed to update sender address during roaming",
+				"sender_index", sender,
+				"new_addr", peer.String(),
+				"error", err.Error())
 			return nil, nil
 		}
 	}
-	
+
 	// Log data transfer to stats
 	if t.stats != nil {
 		t.stats.LogDataTransfer(sender, receiverIdx, len(packet), peer)
 	}
-	
+
+	slog.Debug("✅ Transport data forwarded",
+		"from_index", sender,
+		"to_index", receiverIdx,
+		"from_addr", peer.String(),
+		"to_addr", receiver.String(),
+		"packet_size", len(packet))
+
 	return []net.UDPAddr{receiver}, packet
 }
 
@@ -199,15 +233,15 @@ func MakeWireguardAnalyzer(pubkeys [][]byte) WireguardAnalyzer {
 	if err != nil {
 		log.Fatal(fmt.Errorf("failed to generate cookie secret: %w", err))
 	}
-	
+
 	vpnStats := stats.NewVPNStats()
 	table := exchange.MakeExchangeTable()
-	
+
 	// Imposta il callback per le disconnessioni
 	table.SetPeerExpiredCallback(func(peerIndex uint32, reason string) {
 		vpnStats.LogPeerDisconnected(peerIndex, reason)
 	})
-	
+
 	return WireguardAnalyzer{
 		table: table,
 		checker: macChecker{
