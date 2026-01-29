@@ -223,8 +223,11 @@ func (s *VPNStats) LogPeerDisconnected(peerIndex uint32, reason string) {
 	defer s.mu.Unlock()
 
 	if peer, exists := s.Peers[peerIndex]; exists {
+		// ⚡ PROTEZIONE: Decrementa solo se il peer era veramente connesso
 		if peer.Status == PeerStatusConnected {
-			s.ActiveSessions--
+			if s.ActiveSessions > 0 {
+				s.ActiveSessions--
+			}
 		}
 		peer.Status = PeerStatusDisconnected
 		
@@ -350,12 +353,16 @@ func (s *VPNStats) CleanupExpiredPeers(timeout time.Duration) {
 		// Se il peer è connesso ma non invia dati da troppo tempo, marcalo come disconnesso
 		if peer.Status == PeerStatusConnected && timeSinceLastSeen > timeout {
 			peer.Status = PeerStatusDisconnected
-			s.ActiveSessions--
+			// ⚡ PROTEZIONE: Evita ActiveSessions negative
+			if s.ActiveSessions > 0 {
+				s.ActiveSessions--
+			}
 			slog.Info("Peer marked as disconnected due to timeout", 
 				"peer_index", index, 
 				"address", peer.Address,
 				"last_seen", peer.LastSeen,
-				"timeout_duration", timeSinceLastSeen.String())
+				"timeout_duration", timeSinceLastSeen.String(),
+				"active_sessions_remaining", s.ActiveSessions)
 		}
 		
 		// Rimuovi peer disconnessi da più di 2x timeout
@@ -411,8 +418,9 @@ func (s *VPNStats) SyncPeerStatus() {
 	
 	now := time.Now()
 	syncedCount := 0
+	actualConnected := uint64(0) // ⚡ Conta i peer realmente connessi
 	
-	// 1. Corregge status inconsistenti
+	// 1. Corregge status inconsistenti e ripara ActiveSessions
 	for index, peer := range s.Peers {
 		// Se un peer ha traffico recente (< 90s) ma è ancora handshaking, marcalo connected
 		if peer.Status == PeerStatusHandshaking && (peer.BytesSent > 0 || peer.BytesRecv > 0) {
@@ -422,7 +430,7 @@ func (s *VPNStats) SyncPeerStatus() {
 				if peer.ConnectedAt.IsZero() {
 					peer.ConnectedAt = now
 				}
-				s.ActiveSessions++
+				actualConnected++
 				syncedCount++
 				slog.Info("Sync: Peer status corrected to connected", 
 					"peer_index", index,
@@ -430,7 +438,17 @@ func (s *VPNStats) SyncPeerStatus() {
 					"bytes_sent", peer.BytesSent,
 					"bytes_received", peer.BytesRecv)
 			}
+		} else if peer.Status == PeerStatusConnected {
+			actualConnected++
 		}
+	}
+	
+	// ⚡ RIPARAZIONE: Corregge ActiveSessions se inconsistente
+	if s.ActiveSessions != actualConnected {
+		slog.Warn("ActiveSessions inconsistency detected - repairing", 
+			"reported_active", s.ActiveSessions,
+			"actual_connected", actualConnected)
+		s.ActiveSessions = actualConnected
 	}
 	
 	// 2. Rimuove peer duplicati (stesso indirizzo)
@@ -446,7 +464,8 @@ func (s *VPNStats) SyncPeerStatus() {
 			
 			if totalBytesCurrent > totalBytesExisting {
 				// Il peer corrente ha più traffico - rimuovi quello esistente
-				if existingPeer.Status == PeerStatusConnected {
+				// ⚡ PROTEZIONE: Verifica stato prima di decrementare
+				if existingPeer.Status == PeerStatusConnected && s.ActiveSessions > 0 {
 					s.ActiveSessions--
 				}
 				delete(s.Peers, existingIndex)
@@ -454,10 +473,12 @@ func (s *VPNStats) SyncPeerStatus() {
 				slog.Info("Removed duplicate peer (kept newer one)", 
 					"removed_index", existingIndex,
 					"kept_index", index,
-					"address", peer.Address)
+					"address", peer.Address,
+					"active_sessions_remaining", s.ActiveSessions)
 			} else {
 				// Il peer esistente ha più traffico - rimuovi quello corrente
-				if peer.Status == PeerStatusConnected {
+				// ⚡ PROTEZIONE: Verifica stato prima di decrementare
+				if peer.Status == PeerStatusConnected && s.ActiveSessions > 0 {
 					s.ActiveSessions--
 				}
 				delete(s.Peers, index)
