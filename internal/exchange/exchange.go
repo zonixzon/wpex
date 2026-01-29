@@ -12,9 +12,9 @@ import (
 type PeerExpiredCallback func(peerIndex uint32, reason string)
 
 const (
-	endpointTTL  = 1 * time.Minute    // Endpoint timeout: 1 minuto (bilanciato)
-	handshakeTTL = 30 * time.Second   // Handshake timeout: 30 secondi (più realistico)
-	sessionTTL   = 5 * time.Minute    // Sessione VPN: 5 minuti (bilanciato)
+	endpointTTL  = 3 * time.Minute  // Endpoint timeout: 3 minuti (era 1)
+	handshakeTTL = 45 * time.Second // Handshake timeout: 45 secondi (era 30)
+	sessionTTL   = 12 * time.Minute // Sessione VPN: 12 minuti (era 5) - più stabile
 )
 
 type endpointInfo struct {
@@ -51,10 +51,10 @@ func (p *peerInfo) isExpiredAt(t time.Time) bool {
 
 // ExchangeTable is a concurrency-safe table that maintains wireguard peer information.
 type ExchangeTable struct {
-	mu               sync.RWMutex
-	endpoints        map[string]*endpointInfo
-	peers            map[uint32]peerInfo
-	onPeerExpired    PeerExpiredCallback
+	mu            sync.RWMutex
+	endpoints     map[string]*endpointInfo
+	peers         map[uint32]peerInfo
+	onPeerExpired PeerExpiredCallback
 }
 
 func (t *ExchangeTable) refEndpoint(addr net.UDPAddr) *endpointInfo {
@@ -84,7 +84,7 @@ func (t *ExchangeTable) cleanup() {
 	for index, peer := range t.peers {
 		if peer.isExpiredAt(now) {
 			slog.Debug("remove expired peer information", "index", index)
-			
+
 			// Notifica la scadenza del peer se c'è un callback
 			if t.onPeerExpired != nil {
 				reason := "timeout"
@@ -95,7 +95,7 @@ func (t *ExchangeTable) cleanup() {
 				}
 				t.onPeerExpired(index, reason)
 			}
-			
+
 			t.derefEndpoint(peer.addr)
 			delete(t.peers, index)
 		}

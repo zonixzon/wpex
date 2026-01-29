@@ -12,9 +12,9 @@ import (
 type PeerStatus int
 
 const (
-	PeerStatusHandshaking PeerStatus = iota // Durante handshake
-	PeerStatusConnected                     // Connesso e stabilito
-	PeerStatusDisconnected                  // Disconnesso/scaduto
+	PeerStatusHandshaking  PeerStatus = iota // Durante handshake
+	PeerStatusConnected                      // Connesso e stabilito
+	PeerStatusDisconnected                   // Disconnesso/scaduto
 )
 
 func (ps PeerStatus) String() string {
@@ -61,10 +61,10 @@ func NewVPNStats() *VPNStats {
 		Peers:       make(map[uint32]*PeerInfo),
 		EndpointMap: make(map[string]uint32),
 	}
-	
+
 	// Avvia il cleanup timer automatico (2 minuti di timeout per peer inattivi - bilanciato)
 	stats.StartCleanupTimer(2 * time.Minute)
-	
+
 	return stats
 }
 
@@ -74,7 +74,7 @@ func (s *VPNStats) LogHandshakeInitiated(peerIndex uint32, addr net.UDPAddr) {
 	defer s.mu.Unlock()
 
 	s.TotalHandshakes++
-	
+
 	// Crea o aggiorna le informazioni del peer
 	peer, exists := s.Peers[peerIndex]
 	if !exists {
@@ -93,8 +93,8 @@ func (s *VPNStats) LogHandshakeInitiated(peerIndex uint32, addr net.UDPAddr) {
 	}
 	peer.LastSeen = time.Now()
 
-	slog.Info("Handshake initiated", 
-		"peer_index", peerIndex, 
+	slog.Info("Handshake initiated",
+		"peer_index", peerIndex,
 		"address", addr.String(),
 		"total_handshakes", s.TotalHandshakes)
 }
@@ -118,7 +118,7 @@ func (s *VPNStats) LogHandshakeCompleted(senderIndex, receiverIndex uint32) {
 		}
 	}
 
-	slog.Info("Handshake completed - VPN session established", 
+	slog.Info("Handshake completed - VPN session established",
 		"sender_index", senderIndex,
 		"receiver_index", receiverIndex,
 		"active_sessions", s.ActiveSessions,
@@ -139,7 +139,7 @@ func (s *VPNStats) LogDataTransfer(senderIndex, receiverIndex uint32, bytes int,
 		peer.LastSeen = time.Now() // ⚡ CRITICO: Aggiorna LastSeen ad ogni pacchetto
 		peer.Address = senderAddr.String()
 		s.EndpointMap[senderAddr.String()] = senderIndex
-		
+
 		// Se il peer è in handshaking e invia dati, marcalo come connected
 		if peer.Status == PeerStatusHandshaking {
 			peer.Status = PeerStatusConnected
@@ -147,61 +147,65 @@ func (s *VPNStats) LogDataTransfer(senderIndex, receiverIndex uint32, bytes int,
 				peer.ConnectedAt = time.Now()
 			}
 			s.ActiveSessions++
-			slog.Info("Peer marked as connected due to data transfer", 
+			slog.Info("Peer marked as connected due to data transfer",
 				"peer_index", senderIndex,
 				"address", peer.Address,
 				"bytes_sent", peer.BytesSent)
 		}
 	} else {
-		// Prima controlla se esiste già un peer con lo stesso indirizzo
-		existingPeerIndex := uint32(0)
-		for idx, existingPeer := range s.Peers {
-			if existingPeer.Address == senderAddr.String() {
-				existingPeerIndex = idx
-				break
-			}
-		}
-		
-		if existingPeerIndex != 0 {
-			// Esiste già un peer con questo indirizzo - aggiorna quello esistente
-			existingPeer := s.Peers[existingPeerIndex]
-			existingPeer.BytesSent += uint64(bytes)
-			existingPeer.LastSeen = time.Now()
-			if existingPeer.Status == PeerStatusHandshaking {
-				existingPeer.Status = PeerStatusConnected
-				if existingPeer.ConnectedAt.IsZero() {
-					existingPeer.ConnectedAt = time.Now()
+		// ⚡ OTTIMIZZAZIONE: Controlla prima nella EndpointMap (più veloce)
+		if existingIndex, exists := s.EndpointMap[senderAddr.String()]; exists {
+			// Aggiorna peer esistente
+			if existingPeer, peerExists := s.Peers[existingIndex]; peerExists {
+				existingPeer.BytesSent += uint64(bytes)
+				existingPeer.LastSeen = time.Now()
+
+				// Solo se cambia stato, logga
+				if existingPeer.Status == PeerStatusHandshaking {
+					existingPeer.Status = PeerStatusConnected
+					if existingPeer.ConnectedAt.IsZero() {
+						existingPeer.ConnectedAt = time.Now()
+					}
+					s.ActiveSessions++
+					slog.Info("Peer promoted to connected due to data transfer",
+						"peer_index", existingIndex,
+						"address", senderAddr.String(),
+						"bytes_sent", existingPeer.BytesSent)
 				}
-				s.ActiveSessions++
+
+				// Aggiorna EndpointMap se senderIndex diverso
+				if existingIndex != senderIndex {
+					s.EndpointMap[senderAddr.String()] = senderIndex
+					// Trasferisci dati al nuovo indice se necessario
+					s.Peers[senderIndex] = existingPeer
+					delete(s.Peers, existingIndex)
+				}
+				return
 			}
-			slog.Info("Updated existing peer instead of creating duplicate", 
-				"existing_peer_index", existingPeerIndex,
-				"new_peer_index", senderIndex,
-				"address", senderAddr.String())
-		} else {
-			// Solo se NON esiste un peer con questo indirizzo, creane uno nuovo
-			s.Peers[senderIndex] = &PeerInfo{
-				Index:       senderIndex,
-				Address:     senderAddr.String(),
-				Status:      PeerStatusConnected,
-				ConnectedAt: time.Now(),
-				LastSeen:    time.Now(),
-				BytesSent:   uint64(bytes),
-				BytesRecv:   0,
-			}
-			s.EndpointMap[senderAddr.String()] = senderIndex
-			s.ActiveSessions++
-			slog.Info("New peer auto-created as connected from data transfer", 
-				"peer_index", senderIndex,
-				"address", senderAddr.String())
 		}
+
+		// Se non esiste, crea nuovo peer
+		s.Peers[senderIndex] = &PeerInfo{
+			Index:       senderIndex,
+			Address:     senderAddr.String(),
+			Status:      PeerStatusConnected,
+			ConnectedAt: time.Now(),
+			LastSeen:    time.Now(),
+			BytesSent:   uint64(bytes),
+			BytesRecv:   0,
+		}
+		s.EndpointMap[senderAddr.String()] = senderIndex
+		s.ActiveSessions++
+		slog.Info("New peer created from data transfer",
+			"peer_index", senderIndex,
+			"address", senderAddr.String())
 	}
 
 	// Aggiorna sempre il LastSeen anche per il peer destinatario
 	if peer, exists := s.Peers[receiverIndex]; exists {
 		peer.BytesRecv += uint64(bytes)
 		peer.LastSeen = time.Now() // ⚡ CRITICO: Aggiorna LastSeen anche per chi riceve
-		
+
 		// Se il peer è in handshaking e riceve dati, marcalo come connected
 		if peer.Status == PeerStatusHandshaking {
 			peer.Status = PeerStatusConnected
@@ -209,7 +213,7 @@ func (s *VPNStats) LogDataTransfer(senderIndex, receiverIndex uint32, bytes int,
 				peer.ConnectedAt = time.Now()
 			}
 			s.ActiveSessions++
-			slog.Info("Peer marked as connected due to data reception", 
+			slog.Info("Peer marked as connected due to data reception",
 				"peer_index", receiverIndex,
 				"address", peer.Address,
 				"bytes_received", peer.BytesRecv)
@@ -230,8 +234,8 @@ func (s *VPNStats) LogPeerDisconnected(peerIndex uint32, reason string) {
 			}
 		}
 		peer.Status = PeerStatusDisconnected
-		
-		slog.Info("Peer disconnected", 
+
+		slog.Info("Peer disconnected",
 			"peer_index", peerIndex,
 			"address", peer.Address,
 			"reason", reason,
@@ -239,7 +243,7 @@ func (s *VPNStats) LogPeerDisconnected(peerIndex uint32, reason string) {
 			"bytes_sent", peer.BytesSent,
 			"bytes_received", peer.BytesRecv,
 			"active_sessions", s.ActiveSessions)
-		
+
 		// Rimuovi dalla mappa degli endpoint
 		if addr := peer.Address; addr != "" {
 			delete(s.EndpointMap, addr)
@@ -254,7 +258,7 @@ func (s *VPNStats) GetConnectedPeersCount() int {
 
 	count := 0
 	now := time.Now()
-	
+
 	for _, peer := range s.Peers {
 		// Considera connesso solo se lo stato è Connected E non è scaduto (last_seen < 90s fa)
 		if peer.Status == PeerStatusConnected && now.Sub(peer.LastSeen) < (90*time.Second) {
@@ -311,7 +315,7 @@ func (s *VPNStats) LogPeriodicStats() {
 	uptime := time.Since(s.StartTime)
 	connectedPeers := 0
 	handshakingPeers := 0
-	
+
 	for _, peer := range s.Peers {
 		switch peer.Status {
 		case PeerStatusConnected:
@@ -345,11 +349,11 @@ func (s *VPNStats) CleanupExpiredPeers(timeout time.Duration) {
 
 	now := time.Now()
 	cleanedCount := 0
-	
+
 	for index, peer := range s.Peers {
 		// Considera scaduti i peer che non inviano dati da più di timeout secondi
 		timeSinceLastSeen := now.Sub(peer.LastSeen)
-		
+
 		// Se il peer è connesso ma non invia dati da troppo tempo, marcalo come disconnesso
 		if peer.Status == PeerStatusConnected && timeSinceLastSeen > timeout {
 			peer.Status = PeerStatusDisconnected
@@ -357,31 +361,31 @@ func (s *VPNStats) CleanupExpiredPeers(timeout time.Duration) {
 			if s.ActiveSessions > 0 {
 				s.ActiveSessions--
 			}
-			slog.Info("Peer marked as disconnected due to timeout", 
-				"peer_index", index, 
+			slog.Info("Peer marked as disconnected due to timeout",
+				"peer_index", index,
 				"address", peer.Address,
 				"last_seen", peer.LastSeen,
 				"timeout_duration", timeSinceLastSeen.String(),
 				"active_sessions_remaining", s.ActiveSessions)
 		}
-		
+
 		// Rimuovi peer disconnessi da più di 2x timeout
 		if peer.Status != PeerStatusConnected && timeSinceLastSeen > (timeout*2) {
-			slog.Info("Removing expired peer from stats", 
-				"peer_index", index, 
+			slog.Info("Removing expired peer from stats",
+				"peer_index", index,
 				"address", peer.Address,
 				"last_seen", peer.LastSeen)
-			
+
 			// Rimuovi dalla mappa degli endpoint
 			if addr := peer.Address; addr != "" {
 				delete(s.EndpointMap, addr)
 			}
-			
+
 			delete(s.Peers, index)
 			cleanedCount++
 		}
 	}
-	
+
 	if cleanedCount > 0 {
 		slog.Info("Cleanup completed", "removed_peers", cleanedCount, "active_sessions", s.ActiveSessions)
 	}
@@ -391,21 +395,21 @@ func (s *VPNStats) CleanupExpiredPeers(timeout time.Duration) {
 func (s *VPNStats) ToJSON() ([]byte, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	
+
 	return json.MarshalIndent(s, "", "  ")
 }
 
 // StartCleanupTimer avvia un timer periodico per pulire i peer scaduti
 func (s *VPNStats) StartCleanupTimer(timeout time.Duration) {
 	ticker := time.NewTicker(30 * time.Second) // Cleanup ogni 30 secondi
-	
+
 	go func() {
 		defer ticker.Stop()
-		
+
 		slog.Info("Started peer cleanup timer", "timeout", timeout, "interval", "30s")
-		
+
 		for range ticker.C {
-			s.SyncPeerStatus()       // Prima sincronizza gli status
+			s.SyncPeerStatus()             // Prima sincronizza gli status
 			s.CleanupExpiredPeers(timeout) // Poi pulisce i peer scaduti
 		}
 	}()
@@ -415,11 +419,11 @@ func (s *VPNStats) StartCleanupTimer(timeout time.Duration) {
 func (s *VPNStats) SyncPeerStatus() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	now := time.Now()
 	syncedCount := 0
 	actualConnected := uint64(0) // ⚡ Conta i peer realmente connessi
-	
+
 	// 1. Corregge status inconsistenti e ripara ActiveSessions
 	for index, peer := range s.Peers {
 		// Se un peer ha traffico recente (< 90s) ma è ancora handshaking, marcalo connected
@@ -432,7 +436,7 @@ func (s *VPNStats) SyncPeerStatus() {
 				}
 				actualConnected++
 				syncedCount++
-				slog.Info("Sync: Peer status corrected to connected", 
+				slog.Info("Sync: Peer status corrected to connected",
 					"peer_index", index,
 					"address", peer.Address,
 					"bytes_sent", peer.BytesSent,
@@ -442,26 +446,26 @@ func (s *VPNStats) SyncPeerStatus() {
 			actualConnected++
 		}
 	}
-	
+
 	// ⚡ RIPARAZIONE: Corregge ActiveSessions se inconsistente
 	if s.ActiveSessions != actualConnected {
-		slog.Warn("ActiveSessions inconsistency detected - repairing", 
+		slog.Warn("ActiveSessions inconsistency detected - repairing",
 			"reported_active", s.ActiveSessions,
 			"actual_connected", actualConnected)
 		s.ActiveSessions = actualConnected
 	}
-	
+
 	// 2. Rimuove peer duplicati (stesso indirizzo)
 	addressMap := make(map[string]uint32)
 	duplicatesRemoved := 0
-	
+
 	for index, peer := range s.Peers {
 		if existingIndex, exists := addressMap[peer.Address]; exists {
 			// Trovato duplicato - mantieni quello con più traffico
 			existingPeer := s.Peers[existingIndex]
 			totalBytesExisting := existingPeer.BytesSent + existingPeer.BytesRecv
 			totalBytesCurrent := peer.BytesSent + peer.BytesRecv
-			
+
 			if totalBytesCurrent > totalBytesExisting {
 				// Il peer corrente ha più traffico - rimuovi quello esistente
 				// ⚡ PROTEZIONE: Verifica stato prima di decrementare
@@ -470,7 +474,7 @@ func (s *VPNStats) SyncPeerStatus() {
 				}
 				delete(s.Peers, existingIndex)
 				addressMap[peer.Address] = index
-				slog.Info("Removed duplicate peer (kept newer one)", 
+				slog.Info("Removed duplicate peer (kept newer one)",
 					"removed_index", existingIndex,
 					"kept_index", index,
 					"address", peer.Address,
@@ -482,7 +486,7 @@ func (s *VPNStats) SyncPeerStatus() {
 					s.ActiveSessions--
 				}
 				delete(s.Peers, index)
-				slog.Info("Removed duplicate peer (kept existing one)", 
+				slog.Info("Removed duplicate peer (kept existing one)",
 					"removed_index", index,
 					"kept_index", existingIndex,
 					"address", peer.Address)
@@ -492,9 +496,9 @@ func (s *VPNStats) SyncPeerStatus() {
 			addressMap[peer.Address] = index
 		}
 	}
-	
+
 	if syncedCount > 0 || duplicatesRemoved > 0 {
-		slog.Info("Peer status synchronization completed", 
+		slog.Info("Peer status synchronization completed",
 			"corrected_peers", syncedCount,
 			"removed_duplicates", duplicatesRemoved)
 	}
