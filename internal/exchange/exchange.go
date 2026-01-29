@@ -12,9 +12,9 @@ import (
 type PeerExpiredCallback func(peerIndex uint32, reason string)
 
 const (
-	endpointTTL  = 2 * time.Minute    // Endpoint timeout: 2 minuti
+	endpointTTL  = 1 * time.Minute    // Endpoint timeout: 1 minuto (bilanciato)
 	handshakeTTL = 30 * time.Second   // Handshake timeout: 30 secondi (più realistico)
-	sessionTTL   = 10 * time.Minute   // Sessione VPN: 10 minuti
+	sessionTTL   = 5 * time.Minute    // Sessione VPN: 5 minuti (bilanciato)
 )
 
 type endpointInfo struct {

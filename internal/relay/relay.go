@@ -89,7 +89,7 @@ func StartWithStatsServer(address string, publicKeys [][]byte, broadcastLimit *r
 	// Avvia il logging periodico delle statistiche
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute) // Log ogni 5 minuti
-		cleanupTicker := time.NewTicker(1 * time.Minute) // Cleanup ogni minuto
+		cleanupTicker := time.NewTicker(30 * time.Second) // Cleanup bilanciato ogni 30 secondi
 		defer ticker.Stop()
 		defer cleanupTicker.Stop()
 		
@@ -98,8 +98,8 @@ func StartWithStatsServer(address string, publicKeys [][]byte, broadcastLimit *r
 			case <-ticker.C:
 				relay.analyzer.GetStats().LogPeriodicStats()
 			case <-cleanupTicker.C:
-				// Cleanup dei peer scaduti dalle statistiche (mantieni per 10 minuti dopo l'ultima attività)
-				relay.analyzer.GetStats().CleanupExpiredPeers(10 * time.Minute)
+				// Cleanup dei peer scaduti dalle statistiche (3 minuti per bilanciare reattività e stabilità)
+				relay.analyzer.GetStats().CleanupExpiredPeers(3 * time.Minute)
 			}
 		}
 	}()

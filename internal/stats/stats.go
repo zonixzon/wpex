@@ -62,8 +62,8 @@ func NewVPNStats() *VPNStats {
 		EndpointMap: make(map[string]uint32),
 	}
 	
-	// Avvia il cleanup timer automatico (60 secondi di timeout per peer inattivi)
-	stats.StartCleanupTimer(60 * time.Second)
+	// Avvia il cleanup timer automatico (2 minuti di timeout per peer inattivi - bilanciato)
+	stats.StartCleanupTimer(2 * time.Minute)
 	
 	return stats
 }
@@ -133,10 +133,10 @@ func (s *VPNStats) LogDataTransfer(senderIndex, receiverIndex uint32, bytes int,
 	s.TotalDataPackets++
 	s.TotalBytesTransferred += uint64(bytes)
 
-	// Aggiorna le statistiche del peer mittente
+	// Aggiorna sempre il LastSeen per il peer che invia dati
 	if peer, exists := s.Peers[senderIndex]; exists {
 		peer.BytesSent += uint64(bytes)
-		peer.LastSeen = time.Now()
+		peer.LastSeen = time.Now() // ⚡ CRITICO: Aggiorna LastSeen ad ogni pacchetto
 		peer.Address = senderAddr.String()
 		s.EndpointMap[senderAddr.String()] = senderIndex
 		
@@ -197,10 +197,10 @@ func (s *VPNStats) LogDataTransfer(senderIndex, receiverIndex uint32, bytes int,
 		}
 	}
 
-	// Aggiorna le statistiche del peer destinatario
+	// Aggiorna sempre il LastSeen anche per il peer destinatario
 	if peer, exists := s.Peers[receiverIndex]; exists {
 		peer.BytesRecv += uint64(bytes)
-		peer.LastSeen = time.Now()
+		peer.LastSeen = time.Now() // ⚡ CRITICO: Aggiorna LastSeen anche per chi riceve
 		
 		// Se il peer è in handshaking e riceve dati, marcalo come connected
 		if peer.Status == PeerStatusHandshaking {
@@ -253,8 +253,8 @@ func (s *VPNStats) GetConnectedPeersCount() int {
 	now := time.Now()
 	
 	for _, peer := range s.Peers {
-		// Considera connesso solo se lo stato è Connected E non è scaduto (last_seen < 60s fa)
-		if peer.Status == PeerStatusConnected && now.Sub(peer.LastSeen) < (60*time.Second) {
+		// Considera connesso solo se lo stato è Connected E non è scaduto (last_seen < 90s fa)
+		if peer.Status == PeerStatusConnected && now.Sub(peer.LastSeen) < (90*time.Second) {
 			count++
 		}
 	}
@@ -414,10 +414,10 @@ func (s *VPNStats) SyncPeerStatus() {
 	
 	// 1. Corregge status inconsistenti
 	for index, peer := range s.Peers {
-		// Se un peer ha traffico recente (< 60s) ma è ancora handshaking, marcalo connected
+		// Se un peer ha traffico recente (< 90s) ma è ancora handshaking, marcalo connected
 		if peer.Status == PeerStatusHandshaking && (peer.BytesSent > 0 || peer.BytesRecv > 0) {
 			timeSinceLastSeen := now.Sub(peer.LastSeen)
-			if timeSinceLastSeen < (60 * time.Second) {
+			if timeSinceLastSeen < (90 * time.Second) {
 				peer.Status = PeerStatusConnected
 				if peer.ConnectedAt.IsZero() {
 					peer.ConnectedAt = now
