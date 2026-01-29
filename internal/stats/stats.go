@@ -491,7 +491,9 @@ func (s *VPNStats) SyncPeerStatus() {
 					s.ActiveSessions--
 				}
 				delete(s.Peers, existingIndex)
-				addressMap[peer.Address] = index
+				// ⚡ IMPORTANTE: Aggiorna la mappa globale per puntare al peer corrente
+				s.EndpointMap[peer.Address] = index
+				
 				slog.Info("Removed duplicate peer (kept newer/active one)",
 					"removed_index", existingIndex,
 					"kept_index", index,
@@ -505,6 +507,9 @@ func (s *VPNStats) SyncPeerStatus() {
 					s.ActiveSessions--
 				}
 				delete(s.Peers, index)
+				// ⚡ IMPORTANTE: Assicurati che la mappa punti al peer esistente
+				s.EndpointMap[peer.Address] = existingIndex
+				
 				slog.Info("Removed duplicate peer (kept existing/older one)",
 					"removed_index", index,
 					"kept_index", existingIndex,
