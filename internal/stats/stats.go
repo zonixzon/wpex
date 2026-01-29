@@ -62,8 +62,8 @@ func NewVPNStats() *VPNStats {
 		EndpointMap: make(map[string]uint32),
 	}
 
-	// Avvia il cleanup timer automatico (2 minuti di timeout per peer inattivi - bilanciato)
-	stats.StartCleanupTimer(2 * time.Minute)
+	// Avvia il cleanup timer automatico (45 secondi di timeout per peer inattivi - più reattivo)
+	stats.StartCleanupTimer(45 * time.Second)
 
 	return stats
 }
@@ -260,8 +260,8 @@ func (s *VPNStats) GetConnectedPeersCount() int {
 	now := time.Now()
 
 	for _, peer := range s.Peers {
-		// Considera connesso solo se lo stato è Connected E non è scaduto (last_seen < 90s fa)
-		if peer.Status == PeerStatusConnected && now.Sub(peer.LastSeen) < (90*time.Second) {
+		// Considera connesso solo se lo stato è Connected E non è scaduto (last_seen < 45s fa)
+		if peer.Status == PeerStatusConnected && now.Sub(peer.LastSeen) < (45*time.Second) {
 			count++
 		}
 	}
@@ -401,12 +401,12 @@ func (s *VPNStats) ToJSON() ([]byte, error) {
 
 // StartCleanupTimer avvia un timer periodico per pulire i peer scaduti
 func (s *VPNStats) StartCleanupTimer(timeout time.Duration) {
-	ticker := time.NewTicker(30 * time.Second) // Cleanup ogni 30 secondi
+	ticker := time.NewTicker(5 * time.Second) // Cleanup ogni 5 secondi, molto più frequente
 
 	go func() {
 		defer ticker.Stop()
 
-		slog.Info("Started peer cleanup timer", "timeout", timeout, "interval", "30s")
+		slog.Info("Started peer cleanup timer", "timeout", timeout, "interval", "5s")
 
 		for range ticker.C {
 			s.SyncPeerStatus()             // Prima sincronizza gli status
