@@ -11,7 +11,7 @@ import (
 // generateStatsHTMLDebug genera HTML con debug per identificare problemi di formattazione
 func generateStatsHTMLDebug(stats VPNStats) string {
 	uptime := time.Since(stats.StartTime)
-	
+
 	connectedPeers := 0
 	handshakingPeers := 0
 	for _, peer := range stats.Peers {
@@ -22,15 +22,15 @@ func generateStatsHTMLDebug(stats VPNStats) string {
 			handshakingPeers++
 		}
 	}
-	
+
 	successRate := 0.0
 	if stats.TotalHandshakes > 0 {
 		successRate = float64(stats.SuccessfulHandshakes) / float64(stats.TotalHandshakes) * 100
 	}
-	
+
 	// Debug: costruiamo passo passo per essere sicuri
 	var htmlParts []string
-	
+
 	htmlParts = append(htmlParts, `<!DOCTYPE html>
 <html>
 <head>
@@ -52,10 +52,6 @@ func generateStatsHTMLDebug(stats VPNStats) string {
             from { opacity: 0; transform: translateY(24px); }
             to   { opacity: 1; transform: translateY(0); }
         }
-        @keyframes pulseGlow {
-            0%, 100% { box-shadow: 0 0 20px rgba(124, 106, 239, 0.3); }
-            50%      { box-shadow: 0 0 35px rgba(124, 106, 239, 0.5); }
-        }
         @keyframes gradientShift {
             0%   { background-position: 0% 50%; }
             50%  { background-position: 100% 50%; }
@@ -74,9 +70,6 @@ func generateStatsHTMLDebug(stats VPNStats) string {
         .header h1 {
             font-size: 1.6rem;
             font-weight: 700;
-            display: flex;
-            align-items: center;
-            gap: 12px;
         }
         .gradient-text {
             background: linear-gradient(135deg, #9b8afb, #60a5fa, #34d399);
@@ -93,8 +86,6 @@ func generateStatsHTMLDebug(stats VPNStats) string {
         }
         .badge {
             display: inline-flex;
-            align-items: center;
-            gap: 4px;
             padding: 4px 10px;
             border-radius: 20px;
             font-size: 0.78rem;
@@ -118,14 +109,6 @@ func generateStatsHTMLDebug(stats VPNStats) string {
             transition: all 0.3s cubic-bezier(.4, 0, .2, 1);
             animation: fadeInUp 0.4s ease-out both;
         }
-        .stat-card:nth-child(1) { animation-delay: 0.05s; }
-        .stat-card:nth-child(2) { animation-delay: 0.1s; }
-        .stat-card:nth-child(3) { animation-delay: 0.15s; }
-        .stat-card:nth-child(4) { animation-delay: 0.2s; }
-        .stat-card:nth-child(5) { animation-delay: 0.25s; }
-        .stat-card:nth-child(6) { animation-delay: 0.3s; }
-        .stat-card:nth-child(7) { animation-delay: 0.35s; }
-        .stat-card:nth-child(8) { animation-delay: 0.4s; }
         .stat-card:hover {
             border-color: rgba(124, 106, 239, 0.25);
             box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
@@ -146,9 +129,6 @@ func generateStatsHTMLDebug(stats VPNStats) string {
             font-size: 1.08rem;
             font-weight: 600;
             margin-bottom: 16px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
             color: #e8e8f0;
         }
         .peers-table {
@@ -214,7 +194,6 @@ func generateStatsHTMLDebug(stats VPNStats) string {
             font-size: 0.88rem;
             font-weight: 500;
             transition: all 0.3s cubic-bezier(.4, 0, .2, 1);
-            animation: fadeInUp 0.4s ease-out 0.1s both;
         }
         .refresh-btn:hover {
             background: linear-gradient(135deg, #8b7af0, #7c6aef);
@@ -252,57 +231,57 @@ func generateStatsHTMLDebug(stats VPNStats) string {
         <div class="header">
             <span class="badge">WPEX VPN Server</span>
             <h1><span class="gradient-text">Server Statistics</span></h1>`)
-	
+
 	// Aggiungi timestamp in modo sicuro
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
-	htmlParts = append(htmlParts, fmt.Sprintf("<p>Monitoring dashboard — Last updated: %s</p>", timestamp))
+	htmlParts = append(htmlParts, fmt.Sprintf(`            <p>Monitoring dashboard — Last updated: %s</p>`, timestamp))
 	htmlParts = append(htmlParts, `        </div>
         
         <button class="refresh-btn" onclick="refreshPage()">&#x21bb; Refresh</button>
         
         <div class="stats-grid">`)
-	
+
 	// Aggiungi ogni stat-card una per volta per evitare errori
 	htmlParts = append(htmlParts, fmt.Sprintf(`            <div class="stat-card">
                 <div class="stat-value">%d</div>
                 <div class="stat-label">Connected Peers</div>
             </div>`, connectedPeers))
-	
+
 	htmlParts = append(htmlParts, fmt.Sprintf(`            <div class="stat-card">
                 <div class="stat-value">%d</div>
                 <div class="stat-label">Handshaking Peers</div>
             </div>`, handshakingPeers))
-	
+
 	htmlParts = append(htmlParts, fmt.Sprintf(`            <div class="stat-card">
                 <div class="stat-value">%d</div>
                 <div class="stat-label">Active Sessions</div>
             </div>`, int(stats.ActiveSessions)))
-	
+
 	htmlParts = append(htmlParts, fmt.Sprintf(`            <div class="stat-card">
                 <div class="stat-value">%s</div>
                 <div class="stat-label">Server Uptime</div>
             </div>`, uptime.String()))
-	
+
 	htmlParts = append(htmlParts, fmt.Sprintf(`            <div class="stat-card">
                 <div class="stat-value">%d</div>
                 <div class="stat-label">Total Handshakes</div>
             </div>`, int(stats.TotalHandshakes)))
-	
+
 	htmlParts = append(htmlParts, fmt.Sprintf(`            <div class="stat-card">
                 <div class="stat-value">%.1f%%</div>
                 <div class="stat-label">Success Rate</div>
             </div>`, successRate))
-	
+
 	htmlParts = append(htmlParts, fmt.Sprintf(`            <div class="stat-card">
                 <div class="stat-value">%d</div>
                 <div class="stat-label">Data Packets</div>
             </div>`, int(stats.TotalDataPackets)))
-	
+
 	htmlParts = append(htmlParts, fmt.Sprintf(`            <div class="stat-card">
                 <div class="stat-value">%.2f MB</div>
                 <div class="stat-label">Total Transfer</div>
             </div>`, float64(stats.TotalBytesTransferred)/(1024*1024)))
-	
+
 	htmlParts = append(htmlParts, `        </div>
         
         <div class="section-title">Peer Details</div>
@@ -319,7 +298,7 @@ func generateStatsHTMLDebug(stats VPNStats) string {
                 </tr>
             </thead>
             <tbody>`)
-	
+
 	// Aggiungi righe per ogni peer
 	for _, peer := range stats.Peers {
 		statusClass := "status-disconnected"
@@ -329,7 +308,7 @@ func generateStatsHTMLDebug(stats VPNStats) string {
 		case PeerStatusHandshaking:
 			statusClass = "status-handshaking"
 		}
-		
+
 		peerRow := fmt.Sprintf(`                <tr>
                     <td>%d</td>
                     <td>%s</td>
@@ -347,10 +326,10 @@ func generateStatsHTMLDebug(stats VPNStats) string {
 			peer.LastSeen.Format("15:04:05"),
 			formatBytes(peer.BytesSent),
 			formatBytes(peer.BytesRecv))
-		
+
 		htmlParts = append(htmlParts, peerRow)
 	}
-	
+
 	if len(stats.Peers) == 0 {
 		htmlParts = append(htmlParts, `                <tr>
                     <td colspan="7" style="text-align: center; color: #606078; font-style: italic; padding: 32px;">
@@ -358,7 +337,7 @@ func generateStatsHTMLDebug(stats VPNStats) string {
                     </td>
                 </tr>`)
 	}
-	
+
 	htmlParts = append(htmlParts, `            </tbody>
         </table>
         
@@ -368,6 +347,6 @@ func generateStatsHTMLDebug(stats VPNStats) string {
     </div>
 </body>
 </html>`)
-	
+
 	return strings.Join(htmlParts, "\n")
 }
