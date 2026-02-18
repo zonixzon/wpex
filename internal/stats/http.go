@@ -18,7 +18,7 @@ type HTTPServer struct {
 // NewHTTPServer crea un nuovo server HTTP per le statistiche
 func NewHTTPServer(addr string, stats *VPNStats) *HTTPServer {
 	mux := http.NewServeMux()
-	
+
 	httpServer := &HTTPServer{
 		stats: stats,
 		server: &http.Server{
@@ -26,16 +26,16 @@ func NewHTTPServer(addr string, stats *VPNStats) *HTTPServer {
 			Handler: mux,
 		},
 	}
-	
+
 	// Endpoint per le statistiche in formato JSON
 	mux.HandleFunc("/stats", httpServer.handleStats)
-	
+
 	// Endpoint per le statistiche in formato HTML
 	mux.HandleFunc("/", httpServer.handleStatsHTML)
-	
+
 	// Endpoint per la salute del server
 	mux.HandleFunc("/health", httpServer.handleHealth)
-	
+
 	return httpServer
 }
 
@@ -59,10 +59,10 @@ func (h *HTTPServer) Stop(ctx context.Context) error {
 // handleStats gestisce le richieste per /stats (JSON)
 func (h *HTTPServer) handleStats(w http.ResponseWriter, r *http.Request) {
 	stats := h.stats.GetStats()
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*") // Per CORS se necessario
-	
+
 	if err := json.NewEncoder(w).Encode(stats); err != nil {
 		slog.Error("Error encoding stats to JSON", "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -73,9 +73,9 @@ func (h *HTTPServer) handleStats(w http.ResponseWriter, r *http.Request) {
 // handleStatsHTML gestisce le richieste per / (HTML)
 func (h *HTTPServer) handleStatsHTML(w http.ResponseWriter, r *http.Request) {
 	stats := h.stats.GetStats()
-	
+
 	w.Header().Set("Content-Type", "text/html")
-	
+
 	html := generateStatsHTMLDebug(stats) // Usa versione debug temporaneamente
 	fmt.Fprint(w, html)
 }
@@ -83,13 +83,13 @@ func (h *HTTPServer) handleStatsHTML(w http.ResponseWriter, r *http.Request) {
 // handleHealth gestisce le richieste per /health
 func (h *HTTPServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	uptime := time.Since(h.stats.StartTime)
-	
+
 	health := map[string]interface{}{
-		"status": "ok",
-		"uptime": uptime.String(),
+		"status":    "ok",
+		"uptime":    uptime.String(),
 		"timestamp": time.Now().UTC(),
 	}
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(health)
 }
@@ -97,7 +97,7 @@ func (h *HTTPServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 // generateStatsHTML genera una pagina HTML con le statistiche
 func generateStatsHTML(stats VPNStats) string {
 	uptime := time.Since(stats.StartTime)
-	
+
 	connectedPeers := 0
 	handshakingPeers := 0
 	for _, peer := range stats.Peers {
@@ -108,12 +108,12 @@ func generateStatsHTML(stats VPNStats) string {
 			handshakingPeers++
 		}
 	}
-	
+
 	successRate := 0.0
 	if stats.TotalHandshakes > 0 {
 		successRate = float64(stats.SuccessfulHandshakes) / float64(stats.TotalHandshakes) * 100
 	}
-	
+
 	html := fmt.Sprintf(`
 <!DOCTYPE html>
 <html>
@@ -121,93 +121,191 @@ func generateStatsHTML(stats VPNStats) string {
     <title>WPEX VPN Server Statistics</title>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
             margin: 0;
-            padding: 20px;
-            background-color: #f5f5f5;
+            padding: 32px;
+            background-color: #0e0e14;
+            color: #e8e8f0;
+            -webkit-font-smoothing: antialiased;
+        }
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(24px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes gradientShift {
+            0%%   { background-position: 0%% 50%%; }
+            50%%  { background-position: 100%% 50%%; }
+            100%% { background-position: 0%% 50%%; }
         }
         .container {
             max-width: 1200px;
             margin: 0 auto;
-            background: white;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            animation: fadeInUp 0.5s ease-out;
         }
         .header {
-            border-bottom: 2px solid #007acc;
-            padding-bottom: 10px;
-            margin-bottom: 20px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+            padding-bottom: 20px;
+            margin-bottom: 28px;
+        }
+        .header h1 {
+            font-size: 1.6rem;
+            font-weight: 700;
+        }
+        .gradient-text {
+            background: linear-gradient(135deg, #9b8afb, #60a5fa, #34d399);
+            background-size: 200%% auto;
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+            animation: gradientShift 4s ease infinite;
+        }
+        .header p {
+            color: #9090a8;
+            font-size: 0.9rem;
+            margin-top: 6px;
+        }
+        .badge {
+            display: inline-flex;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 0.78rem;
+            font-weight: 500;
+            background: rgba(124, 106, 239, 0.12);
+            color: #9b8afb;
+            border: 1px solid rgba(124, 106, 239, 0.2);
+            margin-bottom: 12px;
         }
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 15px;
-            margin-bottom: 30px;
+            gap: 16px;
+            margin-bottom: 32px;
         }
         .stat-card {
-            background: #f8f9fa;
-            padding: 15px;
-            border-radius: 5px;
-            border-left: 4px solid #007acc;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.07);
+            padding: 20px;
+            border-radius: 14px;
+            transition: all 0.3s cubic-bezier(.4, 0, .2, 1);
+            animation: fadeInUp 0.4s ease-out both;
+        }
+        .stat-card:hover {
+            border-color: rgba(124, 106, 239, 0.25);
+            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+            transform: translateY(-4px);
         }
         .stat-value {
-            font-size: 24px;
-            font-weight: bold;
-            color: #007acc;
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #9b8afb;
         }
         .stat-label {
-            font-size: 14px;
-            color: #666;
-            margin-top: 5px;
+            font-size: 0.82rem;
+            font-weight: 500;
+            color: #9090a8;
+            margin-top: 6px;
+        }
+        .section-title {
+            font-size: 1.08rem;
+            font-weight: 600;
+            margin-bottom: 16px;
+            color: #e8e8f0;
         }
         .peers-table {
-            width: 100%;
+            width: 100%%;
             border-collapse: collapse;
-            margin-top: 20px;
+            margin-top: 8px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.07);
+            border-radius: 14px;
+            overflow: hidden;
         }
         .peers-table th,
         .peers-table td {
-            padding: 10px;
+            padding: 12px 16px;
             text-align: left;
-            border-bottom: 1px solid #ddd;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
         }
         .peers-table th {
-            background-color: #007acc;
-            color: white;
+            background: linear-gradient(135deg, #7c6aef, #6354c4);
+            color: #fff;
+            font-size: 0.82rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .peers-table td {
+            font-size: 0.88rem;
+            color: #9090a8;
+        }
+        .peers-table tbody tr {
+            transition: background 0.2s ease;
+        }
+        .peers-table tbody tr:hover {
+            background: rgba(255, 255, 255, 0.04);
+        }
+        .peers-table tbody tr:last-child td {
+            border-bottom: none;
         }
         .status-connected {
-            color: #28a745;
-            font-weight: bold;
+            color: #34d399;
+            font-weight: 600;
         }
         .status-handshaking {
-            color: #ffc107;
-            font-weight: bold;
+            color: #fbbf24;
+            font-weight: 600;
         }
         .status-disconnected {
-            color: #dc3545;
-            font-weight: bold;
+            color: #f87171;
+            font-weight: 600;
         }
         .refresh-btn {
-            background: #007acc;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: linear-gradient(135deg, #7c6aef, #6354c4);
             color: white;
             border: none;
-            padding: 10px 20px;
-            border-radius: 5px;
+            padding: 10px 22px;
+            border-radius: 8px;
             cursor: pointer;
-            margin-bottom: 20px;
+            margin-bottom: 24px;
+            font-family: inherit;
+            font-size: 0.88rem;
+            font-weight: 500;
+            transition: all 0.3s cubic-bezier(.4, 0, .2, 1);
         }
         .refresh-btn:hover {
-            background: #005999;
+            background: linear-gradient(135deg, #8b7af0, #7c6aef);
+            box-shadow: 0 4px 20px rgba(124, 106, 239, 0.35);
+            transform: translateY(-1px);
+        }
+        .refresh-btn:active { transform: translateY(0); }
+        .footer {
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid rgba(255, 255, 255, 0.07);
+            text-align: center;
+            color: #606078;
+            font-size: 0.8rem;
+        }
+        @media (max-width: 640px) {
+            body { padding: 16px; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+            .stat-card { padding: 14px; }
+            .stat-value { font-size: 1.2rem; }
+            .peers-table { font-size: 0.8rem; }
+            .peers-table th, .peers-table td { padding: 8px 10px; }
         }
     </style>
     <script>
         function refreshPage() {
             location.reload();
         }
-        
         // Auto-refresh ogni 30 secondi
         setInterval(refreshPage, 30000);
     </script>
@@ -215,11 +313,12 @@ func generateStatsHTML(stats VPNStats) string {
 <body>
     <div class="container">
         <div class="header">
-            <h1>🛡️ WPEX VPN Server Statistics</h1>
-            <p>Server monitoring dashboard - Last updated: %s</p>
+            <span class="badge">WPEX VPN Server</span>
+            <h1><span class="gradient-text">Server Statistics</span></h1>
+            <p>Monitoring dashboard — Last updated: %s</p>
         </div>
         
-        <button class="refresh-btn" onclick="refreshPage()">🔄 Refresh</button>
+        <button class="refresh-btn" onclick="refreshPage()">&#x21bb; Refresh</button>
         
         <div class="stats-grid">
             <div class="stat-card">
@@ -256,7 +355,7 @@ func generateStatsHTML(stats VPNStats) string {
             </div>
         </div>
         
-        <h2>📋 Peer Details</h2>
+        <div class="section-title">Peer Details</div>
         <table class="peers-table">
             <thead>
                 <tr>
@@ -279,7 +378,7 @@ func generateStatsHTML(stats VPNStats) string {
 		successRate,
 		int(stats.TotalDataPackets), // Convertito a int
 		float64(stats.TotalBytesTransferred)/(1024*1024))
-	
+
 	// Aggiungi righe per ogni peer
 	for _, peer := range stats.Peers {
 		statusClass := "status-disconnected"
@@ -289,7 +388,7 @@ func generateStatsHTML(stats VPNStats) string {
 		case PeerStatusHandshaking:
 			statusClass = "status-handshaking"
 		}
-		
+
 		html += fmt.Sprintf(`
                 <tr>
                     <td>%d</td>
@@ -309,27 +408,27 @@ func generateStatsHTML(stats VPNStats) string {
 			formatBytes(peer.BytesSent),
 			formatBytes(peer.BytesRecv))
 	}
-	
+
 	if len(stats.Peers) == 0 {
 		html += `
                 <tr>
-                    <td colspan="7" style="text-align: center; color: #666; font-style: italic;">
+                    <td colspan="7" style="text-align: center; color: #606078; font-style: italic; padding: 32px;">
                         No peers currently tracked
                     </td>
                 </tr>`
 	}
-	
+
 	html += `
             </tbody>
         </table>
         
-        <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd; color: #666; text-align: center;">
-            <small>WPEX VPN Server - Page auto-refreshes every 30 seconds</small>
+        <div class="footer">
+            WPEX VPN Server — Page auto-refreshes every 30 seconds
         </div>
     </div>
 </body>
 </html>`
-	
+
 	return html
 }
 
