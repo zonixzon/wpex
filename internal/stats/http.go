@@ -36,6 +36,14 @@ func NewHTTPServer(addr string, stats *VPNStats) *HTTPServer {
 	// Endpoint per la salute del server
 	mux.HandleFunc("/health", httpServer.handleHealth)
 
+	// API v1 endpoints (SaaS orchestrator integration)
+	mux.HandleFunc("/api/v1/stats", httpServer.handleAPIStats)
+	mux.HandleFunc("/api/v1/health", httpServer.handleAPIHealth)
+	mux.HandleFunc("/api/v1/config", httpServer.handleAPIConfig)
+	mux.HandleFunc("/api/v1/config/reload", httpServer.handleAPIConfigReload)
+	mux.HandleFunc("/api/v1/diagnostics/ping", httpServer.handleAPIPing)
+	mux.HandleFunc("/api/v1/diagnostics/traceroute", httpServer.handleAPITraceroute)
+
 	return httpServer
 }
 

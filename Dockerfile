@@ -25,8 +25,8 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
 # Stage finale - immagine leggera
 FROM --platform=${TARGETPLATFORM:-linux/amd64} alpine:latest
 
-# Installa ca-certificates per HTTPS e tzdata per timezone
-RUN apk --no-cache add ca-certificates tzdata
+# Installa ca-certificates per HTTPS, tzdata per timezone, e diagnostica
+RUN apk --no-cache add ca-certificates tzdata iputils traceroute
 
 # Crea utente non-root per sicurezza
 RUN addgroup -g 1000 wpex && \
