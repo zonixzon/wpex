@@ -246,3 +246,24 @@ func (t *ExchangeTable) SetPeerExpiredCallback(callback PeerExpiredCallback) {
 	defer t.mu.Unlock()
 	t.onPeerExpired = callback
 }
+
+// EvictAllSessions clears the entire peer and endpoint table.
+// Used after a key-list update to force re-handshake for all peers.
+// Peers whose keys are still allowed will reconnect automatically via
+// PersistentKeepalive; peers with revoked keys will be denied at handshake.
+func (t *ExchangeTable) EvictAllSessions() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	for index, peer := range t.peers {
+		if t.onPeerExpired != nil {
+			t.onPeerExpired(index, "key_reload")
+		}
+		delete(t.peers, index)
+		_ = peer
+	}
+	for addr := range t.endpoints {
+		delete(t.endpoints, addr)
+	}
+	slog.Info("ExchangeTable: all sessions evicted for key reload")
+}

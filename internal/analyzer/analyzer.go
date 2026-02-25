@@ -257,3 +257,18 @@ func MakeWireguardAnalyzer(pubkeys [][]byte) WireguardAnalyzer {
 func (t *WireguardAnalyzer) GetStats() *stats.VPNStats {
 	return t.stats
 }
+
+// UpdateAllowedKeys hot-swaps the allowed WireGuard public keys.
+// Sessions belonging to keys that are STILL allowed are kept alive;
+// sessions for removed keys are evicted so those peers cannot transfer
+// data anymore. They must perform a new handshake to reconnect, which
+// will be denied because their key is no longer in the allowed list.
+func (t *WireguardAnalyzer) UpdateAllowedKeys(newKeys [][]byte) {
+	t.checker.UpdatePubkeys(newKeys)
+	// After key update, evict all sessions from the exchange table so that
+	// any peer whose key was removed cannot forward data. Peers with valid
+	// keys will simply re-handshake (fast, < 1 s with PersistentKeepalive).
+	t.table.EvictAllSessions()
+	slog.Info("🔑 Allowed keys updated — all sessions evicted, valid peers will re-handshake",
+		"allowed_key_count", len(newKeys))
+}

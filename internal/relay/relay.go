@@ -78,7 +78,7 @@ func StartWithStatsServer(address string, publicKeys [][]byte, broadcastLimit *r
 	// Avvia il server HTTP per le statistiche se richiesto
 	var httpServer *stats.HTTPServer
 	if statsAddr != "" {
-		httpServer = stats.NewHTTPServer(statsAddr, relay.analyzer.GetStats())
+		httpServer = stats.NewHTTPServer(statsAddr, relay.analyzer.GetStats(), &relay.analyzer)
 		if err := httpServer.Start(); err != nil {
 			slog.Error("Failed to start HTTP stats server", "error", err)
 		} else {

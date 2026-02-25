@@ -9,18 +9,26 @@ import (
 	"time"
 )
 
+// Reloader is satisfied by *analyzer.WireguardAnalyzer — kept as interface
+// to avoid import cycles (stats → analyzer would be circular).
+type Reloader interface {
+	UpdateAllowedKeys(newKeys [][]byte)
+}
+
 // HTTPServer gestisce l'endpoint HTTP per le statistiche
 type HTTPServer struct {
-	server *http.Server
-	stats  *VPNStats
+	server   *http.Server
+	stats    *VPNStats
+	reloader Reloader // optional: hot-reload handler
 }
 
 // NewHTTPServer crea un nuovo server HTTP per le statistiche
-func NewHTTPServer(addr string, stats *VPNStats) *HTTPServer {
+func NewHTTPServer(addr string, stats *VPNStats, reloader Reloader) *HTTPServer {
 	mux := http.NewServeMux()
 
 	httpServer := &HTTPServer{
-		stats: stats,
+		stats:    stats,
+		reloader: reloader,
 		server: &http.Server{
 			Addr:    addr,
 			Handler: mux,

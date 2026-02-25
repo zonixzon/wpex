@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -222,7 +223,8 @@ func (h *HTTPServer) handleAPIConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 // ── /api/v1/config/reload ────────────────────────────────────────────
-// Stub — WPEX has no config file, so hot-reload is not applicable.
+// Hot-reloads the allowed WireGuard public keys without restarting the process.
+// Body: {"public_keys": ["<base64-encoded-32-byte-key>", ...]}
 func (h *HTTPServer) handleAPIConfigReload(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodOptions {
 		setCORS(w)
@@ -234,13 +236,47 @@ func (h *HTTPServer) handleAPIConfigReload(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	if h.reloader == nil {
+		setCORS(w)
+		w.WriteHeader(http.StatusNotImplemented)
+		json.NewEncoder(w).Encode(map[string]string{"error": "hot-reload not available"})
+		return
+	}
+
+	var body struct {
+		PublicKeys []string `json:"public_keys"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		setCORS(w)
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid JSON body"})
+		return
+	}
+
+	var newKeys [][]byte
+	for _, b64 := range body.PublicKeys {
+		key, err := base64.StdEncoding.DecodeString(b64)
+		if err != nil || len(key) != 32 {
+			setCORS(w)
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("invalid key: %s", b64)})
+			return
+		}
+		newKeys = append(newKeys, key)
+	}
+
+	h.reloader.UpdateAllowedKeys(newKeys)
+
+	slog.Info("Hot-reload: allowed keys updated via HTTP", "count", len(newKeys))
 	setCORS(w)
-	w.WriteHeader(http.StatusNotImplemented)
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":  "not_supported",
-		"message": "WPEX relay is configured via CLI arguments. Config hot-reload is not supported. Restart the container to apply new settings.",
+		"status":     "ok",
+		"key_count":  len(newKeys),
+		"message":    "Allowed keys updated. All sessions evicted — valid peers will re-handshake automatically.",
+		"timestamp":  time.Now().UTC(),
 	})
 }
+
 
 // ── /api/v1/diagnostics/ping ─────────────────────────────────────────
 // Runs ping from inside the relay container.

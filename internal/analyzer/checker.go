@@ -4,10 +4,12 @@ import (
 	"crypto/hmac"
 	"encoding/binary"
 	"net"
+	"sync"
 	"time"
 )
 
 type macChecker struct {
+	mu      sync.RWMutex
 	secret  [32]byte
 	start   time.Time
 	pubkeys [][]byte
@@ -29,13 +31,16 @@ func (c *macChecker) MatchPubkey(message []byte) []byte {
 	if len(message) < 2*macSize {
 		return nil
 	}
-	if len(c.pubkeys) == 0 {
+	c.mu.RLock()
+	pubkeys := c.pubkeys
+	c.mu.RUnlock()
+	if len(pubkeys) == 0 {
 		return nil
 	}
 	l := len(message)
 	mac1 := message[l-2*macSize : l-macSize]
 	d := message[:l-2*macSize]
-	for _, pubkey := range c.pubkeys {
+	for _, pubkey := range pubkeys {
 		key := hash(nil, []byte("mac1----"), pubkey)
 		m := mac32(nil, key, d)
 		if hmac.Equal(mac1, m[:]) {
@@ -43,6 +48,13 @@ func (c *macChecker) MatchPubkey(message []byte) []byte {
 		}
 	}
 	return nil
+}
+
+// UpdatePubkeys atomically replaces the allowed public keys at runtime.
+func (c *macChecker) UpdatePubkeys(newKeys [][]byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.pubkeys = newKeys
 }
 
 func (c *macChecker) CreateReply(pubkey []byte, addr net.UDPAddr, msg []byte) ([]byte, error) {
@@ -62,5 +74,7 @@ func (c *macChecker) CreateReply(pubkey []byte, addr net.UDPAddr, msg []byte) ([
 }
 
 func (c *macChecker) RequireCheck() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return len(c.pubkeys) > 0
 }
