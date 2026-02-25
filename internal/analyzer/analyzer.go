@@ -36,12 +36,15 @@ func (t *WireguardAnalyzer) analyseHandshakeInitiation(packet []byte, peer net.U
 		return nil, nil
 	}
 
+	var matchedPubkey []byte // will be set if key check is enabled
+
 	if t.checker.RequireCheck() {
 		pubkey := t.checker.MatchPubkey(packet)
 		if pubkey == nil {
 			logger.Warn("invalid mac1 in handshake initiation")
 			return nil, nil
 		}
+		matchedPubkey = pubkey
 		mac2Ok := t.checker.VerifyMac2(peer, packet)
 		known := t.table.Contains(peer)
 		if !mac2Ok && !known {
@@ -64,6 +67,11 @@ func (t *WireguardAnalyzer) analyseHandshakeInitiation(packet []byte, peer net.U
 	if err := t.table.AddPeerAddr(sender, peer); err != nil {
 		logger.Error(fmt.Sprintf("failed to add address: %s", err))
 		return nil, nil
+	}
+
+	// Record the pubkey → sender index mapping for selective key revocation
+	if matchedPubkey != nil {
+		t.table.SetPeerPubkey(sender, matchedPubkey)
 	}
 
 	// Log handshake initiation to stats
@@ -259,16 +267,11 @@ func (t *WireguardAnalyzer) GetStats() *stats.VPNStats {
 }
 
 // UpdateAllowedKeys hot-swaps the allowed WireGuard public keys.
-// Sessions belonging to keys that are STILL allowed are kept alive;
-// sessions for removed keys are evicted so those peers cannot transfer
-// data anymore. They must perform a new handshake to reconnect, which
-// will be denied because their key is no longer in the allowed list.
+// Only sessions belonging to removed keys are evicted.
+// Sessions for still-valid keys are completely unaffected (zero downtime).
 func (t *WireguardAnalyzer) UpdateAllowedKeys(newKeys [][]byte) {
 	t.checker.UpdatePubkeys(newKeys)
-	// After key update, evict all sessions from the exchange table so that
-	// any peer whose key was removed cannot forward data. Peers with valid
-	// keys will simply re-handshake (fast, < 1 s with PersistentKeepalive).
-	t.table.EvictAllSessions()
-	slog.Info("🔑 Allowed keys updated — all sessions evicted, valid peers will re-handshake",
+	t.table.EvictSessionsByRemovedKeys(newKeys)
+	slog.Info("🔑 Allowed keys updated — removed-key sessions evicted, valid peers unaffected",
 		"allowed_key_count", len(newKeys))
 }

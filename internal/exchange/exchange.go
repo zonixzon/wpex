@@ -54,6 +54,7 @@ type ExchangeTable struct {
 	mu            sync.RWMutex
 	endpoints     map[string]*endpointInfo
 	peers         map[uint32]peerInfo
+	peerPubkeys   map[uint32][32]byte // index → pubkey used in handshake initiation
 	onPeerExpired PeerExpiredCallback
 }
 
@@ -235,8 +236,9 @@ func (t *ExchangeTable) Contains(addr net.UDPAddr) bool {
 
 func MakeExchangeTable() ExchangeTable {
 	return ExchangeTable{
-		endpoints: make(map[string]*endpointInfo),
-		peers:     make(map[uint32]peerInfo),
+		endpoints:   make(map[string]*endpointInfo),
+		peers:       make(map[uint32]peerInfo),
+		peerPubkeys: make(map[uint32][32]byte),
 	}
 }
 
@@ -247,10 +249,70 @@ func (t *ExchangeTable) SetPeerExpiredCallback(callback PeerExpiredCallback) {
 	t.onPeerExpired = callback
 }
 
+// SetPeerPubkey records the matched public key for a given peer index.
+// Called during handshake initiation after the MAC1 check succeeds.
+func (t *ExchangeTable) SetPeerPubkey(index uint32, pubkey []byte) {
+	if len(pubkey) != 32 {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var k [32]byte
+	copy(k[:], pubkey)
+	t.peerPubkeys[index] = k
+}
+
+// EvictSessionsByRemovedKeys selectively evicts sessions whose associated pubkey
+// is NOT in the provided allowedKeys list.
+// Peers whose keys are still allowed are completely unaffected — zero downtime.
+func (t *ExchangeTable) EvictSessionsByRemovedKeys(allowedKeys [][]byte) {
+	// Build fast lookup set
+	allowed := make(map[[32]byte]bool, len(allowedKeys))
+	for _, k := range allowedKeys {
+		if len(k) == 32 {
+			var key [32]byte
+			copy(key[:], k)
+			allowed[key] = true
+		}
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	evicted := 0
+	for index, peer := range t.peers {
+		pubkey, known := t.peerPubkeys[index]
+		if !known {
+			// Can't identify this peer's key — leave it alone
+			continue
+		}
+		if allowed[pubkey] {
+			// Key still valid — skip, zero downtime
+			continue
+		}
+		// Key was removed — evict this peer and its linked counterpart
+		if t.onPeerExpired != nil {
+			t.onPeerExpired(index, "key_removed")
+		}
+		if peer.established {
+			counterpart := peer.counterpart
+			if t.onPeerExpired != nil {
+				t.onPeerExpired(counterpart, "key_removed")
+			}
+			delete(t.peers, counterpart)
+			delete(t.peerPubkeys, counterpart)
+		}
+		delete(t.peers, index)
+		delete(t.peerPubkeys, index)
+		evicted++
+	}
+	slog.Info("ExchangeTable: selective eviction done",
+		"evicted_sessions", evicted,
+		"remaining_sessions", len(t.peers))
+}
+
 // EvictAllSessions clears the entire peer and endpoint table.
 // Used after a key-list update to force re-handshake for all peers.
-// Peers whose keys are still allowed will reconnect automatically via
-// PersistentKeepalive; peers with revoked keys will be denied at handshake.
 func (t *ExchangeTable) EvictAllSessions() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -265,5 +327,8 @@ func (t *ExchangeTable) EvictAllSessions() {
 	for addr := range t.endpoints {
 		delete(t.endpoints, addr)
 	}
-	slog.Info("ExchangeTable: all sessions evicted for key reload")
+	for k := range t.peerPubkeys {
+		delete(t.peerPubkeys, k)
+	}
+	slog.Info("ExchangeTable: all sessions evicted")
 }
