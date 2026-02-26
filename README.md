@@ -1,234 +1,243 @@
-# wpex: WireGuard Packet Relay
+# wpex — WireGuard Packet Relay
 
-`wpex` is a relay server designed for WireGuard, facilitating NAT traversal
-without compromising the end-to-end encryption of WireGuard.
+`wpex` is a transparent relay server for WireGuard, enabling NAT traversal without compromising end-to-end encryption.
 
 ## Features
 
-- The relay server **can't** tamper the encryption by any means.
-- Works transparently with vanilla WireGuard setups, no extra software required.
-- Zero MTU overhead.
-- **NEW**: Real-time VPN monitoring and statistics
-- **NEW**: HTTP dashboard for monitoring connected peers and handshake status
-- **NEW**: Detailed logging of peer connections, disconnections, and data transfer
+- **Transparent relay**: Cannot tamper with or decrypt WireGuard traffic by design.
+- **Zero MTU overhead**: No tunneling, no extra encapsulation.
+- **Works with any WireGuard client**: No software changes required on peers (Mikrotik, Linux, Windows, mobile…).
+- **Allowlist-based anti-amplification**: Validates `mac1` against a whitelist of authorized WireGuard public keys — no private key needed.
+- **Real-time statistics HTTP server**: Exposes peer status, handshake metrics, bytes transferred and health scores via JSON API.
+- **Remote diagnostics**: Run `ping` and `traceroute` from inside the relay container via HTTP API.
+- **Hot-reload of allowed keys**: Update the authorized public key list at runtime without restarting the process.
+- **Multi-CPU UDP listener**: Spawns one goroutine per CPU core for high-throughput packet forwarding.
+- **Peer cleanup**: Automatically expires stale peer sessions (default: 45s timeout, 5s check interval).
+
+---
 
 ## Why `wpex`
 
-Commonly, there are three approaches for WireGuard NAT traversal relay. The
-first is using a traditional NAT traversal relay, like `TURN` or `DERP`
-protocol. However, the downside to this method is that it requires you to
-install a `TURN` or `DERP` client on your WireGuard peers, which might be
-impossible or undesirable for some.
+Common WireGuard NAT traversal approaches and their tradeoffs:
 
-The second solution is hub-and-spoke style IP forwarding, where the cloud server
-is also a WireGuard peer. In this setup, packets are decrypted and forwarded on
-the cloud, which, unfortunately, exposes unencrypted data in the cloud server.
+| Approach | Downside |
+|---|---|
+| TURN / DERP | Requires installing a client on every WireGuard peer |
+| Hub-and-spoke IP forwarding | Packets are decrypted on the cloud server |
+| Tunneling | MTU overhead + isolation complexity |
 
-The third solution is tunneling, wherein a tunnel is established between the
-WireGuard peer and the cloud server to transmit encrypted WireGuard packets. The
-caveat here is that, like all tunnels, there are MTU overheads. And you have to
-be cautious about the isolation between the tunnel network and the WireGuard
-network.
+`wpex` solves all three: no agent required, no decryption, no MTU overhead.
 
-`wpex` is engineered to overcome all these issues. It doesn't require any
-software or agent installation on the WireGuard peer side, making it compatible
-with any device running WireGuard. Moreover, `wpex` is designed in such a way
-that it's not possible to decrypt nor tamper with the encryption of WireGuard,
-ensuring the integrity of end-to-end encryption. And, with `wpex`, there are no
-MTU overheads. You can read [How `wpex` Works](#how-wpex-works) to learn about
-the magic behind `wpex`.
+---
 
 ## Installation
 
-### Using Docker:
-
-Fetch and run the `wpex` Docker image with:
+### Docker (recommended for production via WPEX Orchestrator)
 
 ```bash
-docker run -d -p 40000:40000/udp -p 8080:8080 ghcr.io/weiiwang01/wpex:latest --broadcast-rate 3 --stats :8080
+docker run -d \
+  -p 40000:40000/udp \
+  -p 8080:8080 \
+  nikoceps/wpex-monitoring:latest \
+  --port 40000 \
+  --allow AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
+  --allow BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB= \
+  --stats :8080
 ```
 
-See [Protections](#protections-against-amplification-attacks) for more
-information on the `--broadcast-rate` flag and [Monitoring](#monitoring) for
-information on the `--stats` flag.
+### Build from Source
 
-### Using Pre-built Binaries:
-
-You can download pre-built binaries directly from
-the [releases page](https://github.com/weiiwang01/wpex/releases).
-
-### Building from Source:
-
-Ensure you have Go 1.21 or later, then run:
+Requires Go 1.21+:
 
 ```bash
-go install github.com/weiiwang01/wpex@latest
+git clone https://github.com/weiiwang01/wpex.git
+cd wpex
+go build -o wpex .
 ```
+
+---
 
 ## Usage
 
-If you wish to connect multiple WireGuard peers behind NAT via a `wpex` server
-(e.g., at `wpex.test:40000`), follow these steps:
+### Command-Line Flags
 
-1. Update all WireGuard peers' endpoint configurations to point to the `wpex`
-   server.
-2. Enable the `PersistentKeepalive` setting, if the peer is behind a NAT.
+| Flag | Default | Description |
+|---|---|---|
+| `--port` | `40000` | UDP port to listen on |
+| `--bind` | `` (all interfaces) | Address to bind to |
+| `--allow` | _(none)_ | Authorize a WireGuard public key (base64). Repeat for multiple keys. |
+| `--broadcast-rate` | `0` (unlimited) | Max broadcast packets/sec (anti-amplification fallback) |
+| `--stats` | `` (disabled) | Enable HTTP stats server on this address (e.g. `:8080`) |
+| `--debug` | `false` | Enable verbose debug logging |
+| `--version` | `false` | Print version and exit |
 
-**Example for Peer A**:
+### Basic Example
 
+```bash
+# Relay on port 40000 with two authorized peers and stats server
+wpex \
+  --port 40000 \
+  --allow AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
+  --allow BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB= \
+  --stats :8080
 ```
+
+### WireGuard Client Configuration
+
+Both peers must point their `Endpoint` to the relay and enable `PersistentKeepalive`:
+
+**Peer A** (`wg0.conf`):
+```ini
 [Interface]
-PrivateKey = aaaaa...
+PrivateKey = <private_key_A>
 
 [Peer]
-PublicKey = BBBBB...
-Endpoint = wpex.test:40000
+PublicKey  = <public_key_B>
+Endpoint   = relay.example.com:40000
 PersistentKeepalive = 25
+AllowedIPs = <peer_B_subnet>
 ```
 
-**Example for Peer B**:
-
-```
+**Peer B** (`wg0.conf`):
+```ini
 [Interface]
-PrivateKey = bbbbb...
+PrivateKey = <private_key_B>
 
 [Peer]
-PublicKey = AAAAA...
-Endpoint = wpex.test:40000
+PublicKey  = <public_key_A>
+Endpoint   = relay.example.com:40000
 PersistentKeepalive = 25
+AllowedIPs = <peer_A_subnet>
 ```
 
-And that's done, Peer A and Peer B should now connect, and `wpex` will
-automatically relay their traffic.
+> Both public keys must be passed to `wpex` via `--allow` or the handshake will be rejected (`invalid mac1`).
+
+---
 
 ## Protections Against Amplification Attacks
 
-The design principle behind `wpex` is to know as little as possible about the
-WireGuard connections. If it knows nothing, it can't leak anything. By
-default, `wpex` is unaware of any information regarding incoming connections,
-making it vulnerable to DoS and amplification attacks when operating in an
-untrusted network.
+By default, `wpex` broadcasts handshake initiations to all known endpoints. This can be exploited for amplification attacks.
 
-The most rudimentary protection is the `--broadcast-limit`, which will limit the
-rate of amplified packets.
+### Option 1 — Public key allowlist (recommended)
 
-To calculate an ideal broadcast rate limit, use the following formula: given `N`
-represents the number of WireGuard peers connecting to the server, and `K`
-denotes the number of WireGuard peer-to-peer pairs formed from all peers, the
-theoretical maximum rate of broadcast is `(N - 1) * K * 2 / 5`. Set this value
-as the broadcast rate for your `wpex` instance to ensure safe operation.
-
-The effectiveness of the broadcast rate limit's protection will only be realized
-if set to a sufficiently low value, for example, less than 5. This setting may
-not be viable if a larger number of peers are interconnected.
-
-In that case, for best protection, instead of a broadcast rate limit, you can
-provide an allowed list of WireGuard public keys to the `wpex` server, which
-will block any connection attempts from anyone not aware of the public keys.
-This doesn't affect the integrity of the E2E encryption, as only the public
-keys (not the associated private keys) are known to the `wpex` server.
-
-Examples of using public keys:
+Pass all authorized WireGuard public keys via `--allow`. `wpex` will verify the `mac1` field of every handshake initiation and reject unknown peers immediately. This is the approach used by WPEX Orchestrator.
 
 ```bash
-docker run -d -p 40000:40000/udp ghcr.io/weiiwang01/wpex:latest \
-  --allow AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
-  --allow BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=
+wpex --allow <pubkey1> --allow <pubkey2>
 ```
+
+### Option 2 — Broadcast rate limit
+
+Limit how many broadcast packets per second `wpex` will send:
 
 ```bash
-wpex --allow AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
-  --allow BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=
+wpex --broadcast-rate 3
 ```
 
-## Monitoring
+Formula for an ideal rate: given `N` peers and `K` peer-to-peer pairs, the theoretical max broadcast rate is `(N - 1) × K × 2 / 5`.
 
-`wpex` includes comprehensive VPN monitoring capabilities that allow you to track:
+---
 
-- **Handshake Status**: Monitor when peers initiate and complete handshakes
-- **Active Sessions**: Track how many VPN sessions are currently established
-- **Peer Connections**: See which peers are connected, disconnected, or handshaking
-- **Data Transfer**: Monitor bytes transferred per peer and total server statistics
-- **Connection Duration**: Track how long peers have been connected
+## Statistics & Monitoring
 
-### HTTP Statistics Server
+Enable the HTTP server with `--stats :8080`:
 
-Enable the HTTP statistics server with the `--stats` flag:
+### Endpoints
+
+| Path | Method | Description |
+|---|---|---|
+| `/` | GET | HTML dashboard with live stats |
+| `/health` | GET | Simple health check |
+| `/stats` | GET | Raw statistics JSON |
+| `/api/v1/stats` | GET | Enhanced stats: success rate, sorted peer list, uptime |
+| `/api/v1/health` | GET | Weighted health score with component breakdown |
+| `/api/v1/config` | GET | Runtime configuration (CLI args, Go version, goroutines) |
+| `/api/v1/config/reload` | POST | Hot-reload authorized public keys without restart |
+| `/api/v1/diagnostics/ping` | POST | Run `ping` from inside the container |
+| `/api/v1/diagnostics/traceroute` | POST | Run `traceroute` from inside the container |
+
+### Example: `/api/v1/stats` response
+
+```json
+{
+  "uptime_human": "2h5m30s",
+  "total_handshakes": 42,
+  "successful_handshakes": 41,
+  "success_rate": 97.6,
+  "active_sessions": 2,
+  "connected_peers": 2,
+  "total_bytes": 104857600,
+  "total_transfer_mb": 100.0,
+  "peers": [
+    {
+      "index": 12345,
+      "address": "93.43.72.138:13231",
+      "status": "connected",
+      "bytes_sent": 52428800,
+      "bytes_received": 52428800,
+      "uptime_seconds": 7530
+    }
+  ]
+}
+```
+
+### Example: hot-reload allowed keys
 
 ```bash
-# Basic usage with statistics server on port 8080
-wpex --stats :8080
-
-# Full example with broadcast rate limit and statistics
-wpex --port 40000 --broadcast-rate 3 --stats :8080
-
-# With peer filtering and statistics
-wpex --allow AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
-     --broadcast-rate 3 \
-     --stats :8080
+curl -X POST http://localhost:8080/api/v1/config/reload \
+  -H 'Content-Type: application/json' \
+  -d '{"public_keys": ["AAAA...=", "BBBB...="]}'
 ```
 
-Once running, you can access:
-
-- **Dashboard**: `http://localhost:8080/` - Visual dashboard with real-time statistics
-- **JSON API**: `http://localhost:8080/stats` - Raw statistics in JSON format
-- **Health Check**: `http://localhost:8080/health` - Server health status
-
-### Dashboard Features
-
-The web dashboard provides:
-
-- Real-time peer status (Connected/Handshaking/Disconnected)
-- Server uptime and total connection statistics
-- Handshake success rates
-- Per-peer data transfer statistics
-- Auto-refresh every 30 seconds
-- Responsive design for mobile devices
-
-### Logging
-
-`wpex` automatically logs important VPN events:
-
-```
-INFO Handshake initiated peer_index=12345 address=192.168.1.100:51820 total_handshakes=1
-INFO Handshake completed - VPN session established sender_index=12345 receiver_index=67890 active_sessions=1 success_rate=100
-INFO VPN Server Statistics uptime=5m0s connected_peers=2 active_sessions=1 total_handshakes=2 success_rate_percent=100 total_bytes_mb=1.2
-INFO Peer disconnected peer_index=12345 address=192.168.1.100:51820 reason=session_timeout session_duration=10m30s
-```
-
-### Command Line Options
-
-- `--stats <addr>`: Enable HTTP statistics server on specified address (e.g., `:8080`, `0.0.0.0:8080`)
-- All existing options remain unchanged
+---
 
 ## How `wpex` Works
 
-Within each WireGuard session, every peer in the session selects a random 32-bit
-index to identify themselves within that session. `wpex` operates by learning
-the associated endpoint address of each index, and forwarding packet based on
-the receiver index in the message.
+### Packet Routing
 
-For the initial handshake message, which lacks a receiver index, `wpex`
-broadcasts the handshake initiation to all known endpoints. Only the correct
-peer will respond with a handshake response message, while the others will just
-discard the packet. This broadcasting mechanism, however, poses a significant
-vulnerability as it can be exploited for amplification attacks. Attackers can
-create fake handshake initiation messages with the source address spoofed to the
-victim's, easily causing an attack with an amplification factor of thousands.
+Each WireGuard session uses a random 32-bit **peer index** to identify the sender. `wpex` builds a routing table:
 
-This is where public keys come to the rescue. By knowing the public keys of all
-peers, it's possible to verify the `mac1` value within the handshake initiation
-and handshake response messages. However, merely validating the `mac1` is
-inadequate since it doesn't provide resistance to replay attacks as the
-timestamp in handshake messages cannot be decrypted without the private key.
+```
+peer_index → UDP endpoint (IP:port)
+```
 
-To mitigate this, whenever there's a handshake initiation from new
-endpoint, `wpex` sends a pseudo cookie reply to the originating endpoint.
-A structurally valid cookie reply can be generated using only the public key.
-The new endpoint, based on WireGuard protocol, in turn, will react with a new
-handshake initiation with the correct `mac2` value, derived from the cookie
-reply sent earlier. Upon receipt of this, it's affirmed that the new endpoint is
-legitimate, and it's then added to the list of known endpoints. This mechanism
-effectively counters replay attacks as each cookie reply generated is unique.
-The `mac2` value in that handshake initiation message will be striped before
-forwarding since the cookie is generated by `wpex` and not by the actual peer.
+Packets are forwarded to the peer matching the `receiver_index` in the WireGuard message header.
+
+### Handshake Initiation (broadcast phase)
+
+The initial handshake has no receiver index yet. `wpex` broadcasts it to all known endpoints. Only the correct peer responds; others discard it.
+
+### Anti-Replay via Cookie
+
+When a new endpoint initiates a handshake, `wpex` sends a **cookie reply** (constructable using only the public key). The peer must re-send the handshake with a valid `mac2` derived from that cookie — this proves the source IP is legitimate and prevents replay attacks. The `mac2` is stripped before forwarding.
+
+### Peer Cleanup
+
+Stale peers (no activity for 45 seconds) are evicted every 5 seconds to prevent memory leaks. Duplicates (same address, multiple peer indexes) are resolved keeping the newest active session.
+
+---
+
+## Logging
+
+Key log messages:
+
+```
+INFO  server listening                addr=:40000
+INFO  HTTP statistics server started  addr=:8080
+INFO  Handshake initiated             peer_index=12345 address=1.2.3.4:51820 total_handshakes=1
+INFO  Handshake completed             sender_index=12345 receiver_index=67890 active_sessions=1
+WARN  invalid mac1 in handshake initiation  addr=1.2.3.4:51821   ← unknown pubkey → rejected
+INFO  Removed duplicate peer          removed_index=999 kept_index=12345 address=1.2.3.4:51820
+INFO  Peer disconnected               peer_index=12345 reason=session_timeout session_duration=10m
+```
+
+---
+
+## Integration with WPEX Orchestrator
+
+When deployed via [WPEX Orchestrator](https://github.com/nikSlavv/wpex-orchestrator), `wpex` runs as a Kubernetes Deployment in the `wpex` namespace. The Orchestrator:
+
+1. Creates the Deployment with `--port`, `--allow` (one per authorized key), and `--stats :8080`
+2. Creates a NodePort Service exposing the UDP port externally and TCP 8080 internally
+3. Polls `/api/v1/stats` and `/api/v1/health` periodically for the dashboard
+4. Executes diagnostics via K8s pod exec (ping/traceroute)
